@@ -56,6 +56,7 @@ export interface BYOKModelCapabilities {
 	thinking?: boolean;
 	editTools?: EndpointEditToolName[];
 	requestHeaders?: Record<string, string>;
+	systemPrompt?: string;
 }
 
 export interface BYOKModelRegistry {

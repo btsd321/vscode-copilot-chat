@@ -96,30 +96,50 @@ export class LanguageModelAccess extends Disposable implements IExtensionContrib
 	}
 
 	private async _provideLanguageModelChatInfo(options: { silent: boolean }, token: vscode.CancellationToken): Promise<vscode.LanguageModelChatInformation[]> {
-		const session = await this._getToken();
-		if (!session) {
-			this._currentModels = [];
-			return [];
+		// Check if anonymous access is allowed
+		const allowAnonymousAccess = vscode.workspace.getConfiguration().get<boolean>('chat.allowAnonymousAccess', true);
+		const isAnonymous = !this._authenticationService.anyGitHubSession;
+
+		// In anonymous mode with allowAnonymousAccess, skip token check entirely
+		let session: CopilotToken | undefined;
+		if (isAnonymous && allowAnonymousAccess) {
+			// Don't try to get token in anonymous mode - it will just cause errors
+			session = undefined;
+		} else {
+			// Only try to get token if user should be logged in
+			session = await this._getToken();
+			if (!session) {
+				this._currentModels = [];
+				return [];
+			}
 		}
 
 		const models: vscode.LanguageModelChatInformation[] = [];
 		const chatEndpoints = await this._endpointProvider.getAllChatEndpoints();
 
-		// Check if anonymous access is allowed
-		const allowAnonymousAccess = vscode.workspace.getConfiguration().get<boolean>('chat.allowAnonymousAccess', true);
-		const isAnonymous = !this._authenticationService.anyGitHubSession;
-
-		// Filter endpoints - if anonymous access is enabled, only show BYOK models
-		const filteredEndpoints = isAnonymous && allowAnonymousAccess
+		// Filter endpoints - if anonymous access is enabled and no session, only show BYOK models
+		const filteredEndpoints = !session && isAnonymous && allowAnonymousAccess
 			? chatEndpoints.filter(endpoint => endpoint.family !== 'copilot') // Hide official Copilot models for anonymous users
 			: chatEndpoints;
 
-		let defaultChatEndpoint = filteredEndpoints.find(e => e.isDefault) ?? await this._endpointProvider.getChatEndpoint('gpt-4.1') ?? filteredEndpoints[0];
-		const autoEndpoint = await this._automodeService.resolveAutoModeEndpoint(undefined, filteredEndpoints);
-		filteredEndpoints.push(autoEndpoint);
-		// No Auth users always get Auto as the default model
-		if (this._authenticationService.copilotToken?.isNoAuthUser) {
-			defaultChatEndpoint = autoEndpoint;
+		let defaultChatEndpoint = filteredEndpoints.find(e => e.isDefault);
+
+		// Only create auto endpoint and set default for logged-in users
+		if (session) {
+			if (!defaultChatEndpoint) {
+				defaultChatEndpoint = await this._endpointProvider.getChatEndpoint('gpt-4.1') ?? filteredEndpoints[0];
+			}
+			const autoEndpoint = await this._automodeService.resolveAutoModeEndpoint(undefined, filteredEndpoints);
+			filteredEndpoints.push(autoEndpoint);
+			// No Auth users always get Auto as the default model
+			if (this._authenticationService.copilotToken?.isNoAuthUser) {
+				defaultChatEndpoint = autoEndpoint;
+			}
+		} else {
+			// For anonymous users, use the first available model as default
+			if (!defaultChatEndpoint) {
+				defaultChatEndpoint = filteredEndpoints[0];
+			}
 		}
 		const seenFamilies = new Set<string>();
 
@@ -254,13 +274,15 @@ export class LanguageModelAccess extends Disposable implements IExtensionContrib
 		}));
 	}
 
-	private async _getToken(): Promise<CopilotToken | undefined> {
+	private async _getToken(silent: boolean = false): Promise<CopilotToken | undefined> {
 		try {
 			const copilotToken = await this._authenticationService.getCopilotToken();
 			return copilotToken;
 		} catch (e) {
-			this._logService.warn('[LanguageModelAccess] LanguageModel/Embeddings are not available without auth token');
-			this._logService.error(e);
+			if (!silent) {
+				this._logService.warn('[LanguageModelAccess] LanguageModel/Embeddings are not available without auth token');
+				this._logService.error(e);
+			}
 			return undefined;
 		}
 	}

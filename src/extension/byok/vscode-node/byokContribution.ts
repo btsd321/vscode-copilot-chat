@@ -86,9 +86,21 @@ export class BYOKContrib extends Disposable implements IExtensionContribution {
 		// Check if BYOK is enabled or if anonymous access is allowed
 		const allowAnonymousAccess = this._configurationService.getNonExtensionConfig<boolean>('chat.allowAnonymousAccess');
 		const isAnonymous = !authService.anyGitHubSession;
+		const hasCopilotToken = !!authService.copilotToken;
+		const isBYOKAllowed = (hasCopilotToken && isBYOKEnabled(authService.copilotToken!, this._capiClientService)) || (isAnonymous && allowAnonymousAccess);
 
-		if ((authService.copilotToken && isBYOKEnabled(authService.copilotToken, this._capiClientService) || (isAnonymous && allowAnonymousAccess)) && !this._byokProvidersRegistered) {
+		this._logService.info(`BYOK: allowAnonymousAccess=${allowAnonymousAccess}, isAnonymous=${isAnonymous}, hasCopilotToken=${hasCopilotToken}, isBYOKAllowed=${isBYOKAllowed}, registered=${this._byokProvidersRegistered}`);
+
+		// If conditions changed, we need to re-register providers
+		if (!isBYOKAllowed && this._byokProvidersRegistered) {
+			this._logService.info('BYOK: Conditions no longer met, unregistering providers...');
+			this._byokProvidersRegistered = false;
+			// Providers will be automatically unregistered when disposed
+		}
+
+		if (isBYOKAllowed && !this._byokProvidersRegistered) {
 			this._byokProvidersRegistered = true;
+			this._logService.info('BYOK: Registering providers...');
 			// Update known models list from CDN so all providers have the same list
 			const knownModels = await this.fetchKnownModelList(this._fetcherService);
 			this._providers.set(OllamaLMProvider.providerName.toLowerCase(), instantiationService.createInstance(OllamaLMProvider, this._configurationService.getConfig(ConfigKey.OllamaEndpoint), this._byokStorageService));

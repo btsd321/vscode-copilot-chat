@@ -68,8 +68,12 @@ export class CustomOAIBYOKModelProvider implements BYOKModelProvider<CustomOAIMo
 		return resolveCustomOAIUrl(modelId, url);
 	}
 
-	private getUserModelConfig(): Record<string, { name: string; url: string; toolCalling: boolean; vision: boolean; maxInputTokens: number; maxOutputTokens: number; requiresAPIKey: boolean; thinking?: boolean; editTools?: EndpointEditToolName[]; requestHeaders?: Record<string, string> }> {
-		const modelConfig = this._configurationService.getConfig(this.getConfigKey()) as Record<string, { name: string; url: string; toolCalling: boolean; vision: boolean; maxInputTokens: number; maxOutputTokens: number; requiresAPIKey: boolean; thinking?: boolean; editTools?: EndpointEditToolName[]; requestHeaders?: Record<string, string> }>;
+	private getUserModelConfig(): Record<string, { name: string; url: string; toolCalling: boolean; vision: boolean; maxInputTokens: number; maxOutputTokens: number; requiresAPIKey: boolean; thinking?: boolean; editTools?: EndpointEditToolName[]; requestHeaders?: Record<string, string>; modelName?: string; systemPrompt?: string }> {
+		const modelConfig = this._configurationService.getConfig(this.getConfigKey()) as Record<string, { name: string; url: string; toolCalling: boolean; vision: boolean; maxInputTokens: number; maxOutputTokens: number; requiresAPIKey: boolean; thinking?: boolean; editTools?: EndpointEditToolName[]; requestHeaders?: Record<string, string>; modelName?: string; systemPrompt?: string }>;
+		this._logService.info(`CustomOAI: getUserModelConfig returned ${Object.keys(modelConfig || {}).length} models from config key '${this.getConfigKey()}'`);
+		if (modelConfig) {
+			this._logService.info(`CustomOAI: Model IDs from config: ${Object.keys(modelConfig).join(', ')}`);
+		}
 		return modelConfig;
 	}
 
@@ -81,6 +85,7 @@ export class CustomOAIBYOKModelProvider implements BYOKModelProvider<CustomOAIMo
 	private async getAllModels(): Promise<BYOKKnownModels> {
 		const modelConfig = this.getUserModelConfig();
 		const models: BYOKKnownModels = {};
+		this._logService.info(`CustomOAI: getAllModels processing ${Object.keys(modelConfig || {}).length} models from config`);
 		for (const [modelId, modelInfo] of Object.entries(modelConfig)) {
 			models[modelId] = {
 				name: modelInfo.name,
@@ -91,9 +96,12 @@ export class CustomOAIBYOKModelProvider implements BYOKModelProvider<CustomOAIMo
 				maxOutputTokens: modelInfo.maxOutputTokens,
 				thinking: modelInfo.thinking,
 				editTools: modelInfo.editTools,
-				requestHeaders: modelInfo.requestHeaders ? { ...modelInfo.requestHeaders } : undefined
+				requestHeaders: modelInfo.requestHeaders ? { ...modelInfo.requestHeaders } : undefined,
+				systemPrompt: modelInfo.systemPrompt
 			};
+			this._logService.info(`CustomOAI: Added model '${modelId}' with url '${models[modelId].url}'`);
 		}
+		this._logService.info(`CustomOAI: getAllModels returning ${Object.keys(models).length} models`);
 		return models;
 	}
 
@@ -113,14 +121,14 @@ export class CustomOAIBYOKModelProvider implements BYOKModelProvider<CustomOAIMo
 					await this._byokStorageService.storeAPIKey(this.providerName, apiKey, BYOKAuthType.PerModelDeployment, modelId);
 				}
 			}
-			if (apiKey) {
-				modelsWithApiKeys[modelId] = modelInfo;
-			}
+			// Always show the model in the list, even if API key is not configured yet
+			// The API key will be prompted when the model is actually used
+			modelsWithApiKeys[modelId] = modelInfo;
 		}
 		return modelsWithApiKeys;
 	}
 
-	private createModelInfo(id: string, capabilities: BYOKKnownModels[string]): CustomOAIModelInfo {
+	private createModelInfo(id: string, capabilities: BYOKKnownModels[string], isDefault: boolean = false): CustomOAIModelInfo {
 		const baseInfo: CustomOAIModelInfo = {
 			id,
 			url: capabilities.url || '',
@@ -138,21 +146,30 @@ export class CustomOAIBYOKModelProvider implements BYOKModelProvider<CustomOAIMo
 			},
 			thinking: capabilities.thinking || false,
 			requestHeaders: capabilities.requestHeaders,
+			isDefault: isDefault,
+			isUserSelectable: true,
 		};
+		this._logService.info(`CustomOAI: Created model info for '${id}', isDefault=${isDefault}`);
 		return baseInfo;
 	}
 
 	async provideLanguageModelChatInformation(options: { silent: boolean }, token: CancellationToken): Promise<CustomOAIModelInfo[]> {
+		this._logService.info(`CustomOAI: provideLanguageModelChatInformation called, silent=${options.silent}`);
 		try {
 			let knownModels = await this.getModelsWithAPIKeys(options.silent);
+			this._logService.info(`CustomOAI: Found ${Object.keys(knownModels).length} models: ${Object.keys(knownModels).join(', ')}`);
 			if (Object.keys(knownModels).length === 0 && !options.silent) {
 				await new CustomOAIModelConfigurator(this._configurationService, this.providerName.toLowerCase(), this).configure(true);
 				knownModels = await this.getModelsWithAPIKeys(options.silent);
 			}
-			return Object.entries(knownModels).map(([id, capabilities]) => {
-				return this.createModelInfo(id, capabilities);
+			const modelEntries = Object.entries(knownModels);
+			return modelEntries.map(([id, capabilities], index) => {
+				// 第一个模型设为默认模型
+				const isFirst = index === 0;
+				return this.createModelInfo(id, capabilities, isFirst);
 			});
-		} catch {
+		} catch (error) {
+			this._logService.error(`CustomOAI: Error in provideLanguageModelChatInformation: ${error}`);
 			return [];
 		}
 	}
@@ -163,8 +180,15 @@ export class CustomOAIBYOKModelProvider implements BYOKModelProvider<CustomOAIMo
 		if (requireAPIKey) {
 			apiKey = await this._byokStorageService.getAPIKey(this.providerName, model.id);
 			if (!apiKey) {
-				this._logService.error(`No API key found for model ${model.id}`);
-				throw new Error(`No API key found for model ${model.id}`);
+				// Prompt user for API key when they first use the model
+				this._logService.info(`No API key found for model ${model.id}, prompting user...`);
+				apiKey = await promptForAPIKey(`${this.providerName} - ${model.id}`, false);
+				if (!apiKey) {
+					this._logService.error(`User cancelled API key input for model ${model.id}`);
+					throw new Error(`API key is required for model ${model.id}`);
+				}
+				// Store the API key for future use
+				await this._byokStorageService.storeAPIKey(this.providerName, apiKey, BYOKAuthType.PerModelDeployment, model.id);
 			}
 		}
 		const modelInfo = resolveModelInfo(model.id, this.providerName, undefined, {
@@ -188,8 +212,15 @@ export class CustomOAIBYOKModelProvider implements BYOKModelProvider<CustomOAIMo
 		if (requireAPIKey) {
 			apiKey = await this._byokStorageService.getAPIKey(this.providerName, model.id);
 			if (!apiKey) {
-				this._logService.error(`No API key found for model ${model.id}`);
-				throw new Error(`No API key found for model ${model.id}`);
+				// Prompt user for API key when they first use the model
+				this._logService.info(`No API key found for model ${model.id} (token count), prompting user...`);
+				apiKey = await promptForAPIKey(`${this.providerName} - ${model.id}`, false);
+				if (!apiKey) {
+					this._logService.error(`User cancelled API key input for model ${model.id} (token count)`);
+					throw new Error(`API key is required for model ${model.id}`);
+				}
+				// Store the API key for future use
+				await this._byokStorageService.storeAPIKey(this.providerName, apiKey, BYOKAuthType.PerModelDeployment, model.id);
 			}
 		}
 
