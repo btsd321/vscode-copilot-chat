@@ -83,7 +83,11 @@ export class BYOKContrib extends Disposable implements IExtensionContribution {
 	}
 
 	private async _authChange(authService: IAuthenticationService, instantiationService: IInstantiationService) {
-		if (authService.copilotToken && isBYOKEnabled(authService.copilotToken, this._capiClientService) && !this._byokProvidersRegistered) {
+		// Check if BYOK is enabled or if anonymous access is allowed
+		const allowAnonymousAccess = this._configurationService.getNonExtensionConfig<boolean>('chat.allowAnonymousAccess');
+		const isAnonymous = !authService.anyGitHubSession;
+
+		if ((authService.copilotToken && isBYOKEnabled(authService.copilotToken, this._capiClientService) || (isAnonymous && allowAnonymousAccess)) && !this._byokProvidersRegistered) {
 			this._byokProvidersRegistered = true;
 			// Update known models list from CDN so all providers have the same list
 			const knownModels = await this.fetchKnownModelList(this._fetcherService);

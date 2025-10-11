@@ -2219,6 +2219,11 @@
 				"title": "GitHub Copilot Chat",
 				"id": "stable",
 				"properties": {
+					"chat.allowAnonymousAccess": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "Allow Copilot Chat to work without GitHub authentication when using third-party models."
+					},
 					"github.copilot.chat.codeGeneration.useInstructionFiles": {
 						"type": "boolean",
 						"default": true,
@@ -2495,6 +2500,11 @@
 				"title": "Experimental",
 				"id": "experimental",
 				"properties": {
+					"chat.allowAnonymousAccess": {
+						"type": "boolean",
+						"default": true,
+						"description": "Allow Copilot Chat to work without GitHub authentication when using third-party models."
+					},
 					"github.copilot.chat.agent.thinkingTool": {
 						"type": "boolean",
 						"default": false,

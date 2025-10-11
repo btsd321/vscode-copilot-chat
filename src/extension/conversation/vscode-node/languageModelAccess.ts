@@ -105,16 +105,25 @@ export class LanguageModelAccess extends Disposable implements IExtensionContrib
 		const models: vscode.LanguageModelChatInformation[] = [];
 		const chatEndpoints = await this._endpointProvider.getAllChatEndpoints();
 
-		let defaultChatEndpoint = chatEndpoints.find(e => e.isDefault) ?? await this._endpointProvider.getChatEndpoint('gpt-4.1') ?? chatEndpoints[0];
-		const autoEndpoint = await this._automodeService.resolveAutoModeEndpoint(undefined, chatEndpoints);
-		chatEndpoints.push(autoEndpoint);
+		// Check if anonymous access is allowed
+		const allowAnonymousAccess = vscode.workspace.getConfiguration().get<boolean>('chat.allowAnonymousAccess', true);
+		const isAnonymous = !this._authenticationService.anyGitHubSession;
+
+		// Filter endpoints - if anonymous access is enabled, only show BYOK models
+		const filteredEndpoints = isAnonymous && allowAnonymousAccess
+			? chatEndpoints.filter(endpoint => endpoint.family !== 'copilot') // Hide official Copilot models for anonymous users
+			: chatEndpoints;
+
+		let defaultChatEndpoint = filteredEndpoints.find(e => e.isDefault) ?? await this._endpointProvider.getChatEndpoint('gpt-4.1') ?? filteredEndpoints[0];
+		const autoEndpoint = await this._automodeService.resolveAutoModeEndpoint(undefined, filteredEndpoints);
+		filteredEndpoints.push(autoEndpoint);
 		// No Auth users always get Auto as the default model
 		if (this._authenticationService.copilotToken?.isNoAuthUser) {
 			defaultChatEndpoint = autoEndpoint;
 		}
 		const seenFamilies = new Set<string>();
 
-		for (const endpoint of chatEndpoints) {
+		for (const endpoint of filteredEndpoints) {
 			if (seenFamilies.has(endpoint.family) && !endpoint.showInModelPicker) {
 				continue;
 			}
