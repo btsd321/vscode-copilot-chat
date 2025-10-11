@@ -31,10 +31,50 @@ You MUST check compilation output before running ANY script or declaring work co
 2. **NEVER** use the `compile` task as a way to check if everything is working properly
 3. **FIX** all compilation errors before moving forward
 
+### Understanding Errors vs Warnings
+
+**CRITICAL**: Not all "problems" reported by VS Code are compilation blockers:
+
+1. **JSON Schema Validation Warnings (NOT compilation errors)**:
+   - `package.json` tool name pattern warnings (e.g., "String does not match the pattern of...")
+   - These are **schema validation warnings**, NOT compilation errors
+   - The extension compiles and runs perfectly fine with these warnings
+   - **DO NOT** try to "fix" these unless explicitly asked
+   - **DO NOT** block compilation tasks because of these warnings
+
+2. **Real Compilation Errors**:
+   - TypeScript errors in `.ts` or `.tsx` files
+   - ESLint errors marked as "error" severity
+   - Module resolution failures
+   - Syntax errors
+
+3. **How to distinguish**:
+   - Check the **source** of the problem:
+     - `ts` = TypeScript compiler (MUST fix)
+     - `json` in package.json with pattern warnings = Schema validation (IGNORE for compilation)
+   - Check **task output**: If `start-watch-tasks` shows "succeeded with no problems", compilation is OK
+   - Exit Code 0 = Success (see Terminal Command Rules below)
+
+### Example - What to IGNORE when compiling:
+
+```
+Problems found in package.json:
+- "copilot_searchCodebase" does not match pattern "^(?!copilot_|vscode_)[\w-]+$"
+```
+**→ This is HARMLESS. Proceed with compilation.**
+
+### Example - What MUST be fixed:
+
+```
+src/extension/tools/myTool.ts:15:5 - error TS2322: Type 'string' is not assignable to type 'number'
+```
+**→ This BLOCKS compilation. Must fix before proceeding.**
+
 ### TypeScript compilation steps
 - Monitor the `start-watch-tasks` task outputs for real-time compilation errors as you make changes
 - This task runs `npm: watch:tsc-extension`,`npm: watch:tsc-extension-web`, `npm: watch:tsc-simulation-workbench`, and `npm: watch:esbuild` to incrementally compile the project
 - Start the task if it's not already running in the background
+- **If all tasks show "succeeded with no problems", compilation is successful** - proceed immediately
 
 ## Project Architecture
 
