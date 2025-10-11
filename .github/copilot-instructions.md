@@ -341,3 +341,15 @@ This extension is a complex, multi-layered system that provides comprehensive AI
 ## Best Practices
 - Use services and dependency injection whenever possible instead of using node or vscode APIs directly. For example, use `IFileService` instead of node's `fs`.
 - Always use the URI type instead of using string file paths. There are many helpers available for working with URIs.
+
+## Terminal Command Success/Failure Rules
+
+**CRITICAL**: When checking terminal command results:
+
+1. Exit Code 0 = SUCCESS ✓ (even with warnings)
+2. Exit Code non-zero = FAILURE ✗
+3. DO NOT judge by stderr content alone
+4. npm/pip warnings are NORMAL when Exit Code is 0
+
+Example:
+- `Exit Code: 0` with npm warnings → STILL SUCCESSFUL
