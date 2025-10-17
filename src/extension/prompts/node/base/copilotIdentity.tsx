@@ -4,8 +4,17 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { PromptElement } from '@vscode/prompt-tsx';
+import { IPromptEndpoint } from './promptRenderer';
 
 export class CopilotIdentityRules extends PromptElement {
+
+	constructor(
+		props: any,
+		@IPromptEndpoint private readonly promptEndpoint: IPromptEndpoint
+	) {
+		super(props);
+	}
+
 	render() {
 		return (
 			<>
@@ -17,6 +26,14 @@ export class CopilotIdentityRules extends PromptElement {
 }
 
 export class GPT5CopilotIdentityRule extends PromptElement {
+
+	constructor(
+		props: any,
+		@IPromptEndpoint private readonly promptEndpoint: IPromptEndpoint
+	) {
+		super(props);
+	}
+
 	render() {
 		return (
 			<>
