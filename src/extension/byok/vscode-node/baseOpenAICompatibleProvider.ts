@@ -49,15 +49,16 @@ export abstract class BaseOpenAICompatibleLMProvider implements BYOKModelProvide
 			if (models.error) {
 				throw models.error;
 			}
+			this._logService.trace(`Fetched ${models.data.length} models from ${this._name}`);
 			const modelList: BYOKKnownModels = {};
 			for (const model of models.data) {
 				if (this._knownModels && this._knownModels[model.id]) {
 					modelList[model.id] = this._knownModels[model.id];
 				}
 			}
+			this._logService.trace(`Filtered to ${Object.keys(modelList).length} known models for ${this._name}`);
 			return modelList;
 		} catch (error) {
-			this._logService.error(error, `Error fetching available ${this._name} models`);
 			throw new Error(error.message ? error.message : error);
 		}
 	}
@@ -79,7 +80,8 @@ export abstract class BaseOpenAICompatibleLMProvider implements BYOKModelProvide
 					return [];
 				}
 			}
-		} catch {
+		} catch (e) {
+			this._logService.error(e, `Error fetching available ${this._name} models`);
 			return [];
 		}
 	}
