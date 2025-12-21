@@ -40,7 +40,10 @@ describe('AzureBYOKModelProvider', () => {
 			deleteAPIKey: vi.fn().mockResolvedValue(undefined),
 			getStoredModelConfigs: vi.fn().mockResolvedValue({}),
 			saveModelConfig: vi.fn().mockResolvedValue(undefined),
-			removeModelConfig: vi.fn().mockResolvedValue(undefined)
+			removeModelConfig: vi.fn().mockResolvedValue(undefined),
+			getCustomProviders: vi.fn().mockResolvedValue([]),
+			addCustomProvider: vi.fn().mockResolvedValue(undefined),
+			removeCustomProvider: vi.fn().mockResolvedValue(undefined)
 		};
 	});
 

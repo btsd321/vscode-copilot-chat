@@ -20,6 +20,7 @@ import { CustomOAIModelConfigurator } from './customOAIModelConfigurator';
 import { CustomOAIBYOKModelProvider } from './customOAIProvider';
 import { GeminiNativeBYOKLMProvider } from './geminiNativeProvider';
 import { OllamaLMProvider } from './ollamaProvider';
+import { OAICompatibleLMProvider } from './openAICompatibleProvider';
 import { OAIBYOKLMProvider } from './openAIProvider';
 import { OpenRouterLMProvider } from './openRouterProvider';
 import { XAIBYOKLMProvider } from './xAIProvider';
@@ -93,6 +94,20 @@ export class BYOKContrib extends Disposable implements IExtensionContribution {
 			this._providers.set(OpenRouterLMProvider.providerName.toLowerCase(), instantiationService.createInstance(OpenRouterLMProvider, this._byokStorageService));
 			this._providers.set(AzureBYOKModelProvider.providerName.toLowerCase(), instantiationService.createInstance(AzureBYOKModelProvider, this._byokStorageService));
 			this._providers.set(CustomOAIBYOKModelProvider.providerName.toLowerCase(), instantiationService.createInstance(CustomOAIBYOKModelProvider, this._byokStorageService));
+
+			// Register OpenAI-compatible providers from configuration
+			const openAICompatibleProviders = this._configurationService.getConfig(ConfigKey.OpenAICompatibleProviders);
+			for (const provider of openAICompatibleProviders) {
+				const providerInstance = instantiationService.createInstance(OAICompatibleLMProvider, provider.name, provider.url, this._byokStorageService);
+				this._providers.set(provider.name.toLowerCase(), providerInstance);
+			}
+
+			// Register custom providers from storage
+			const customProviders = await this._byokStorageService.getCustomProviders();
+			for (const customProvider of customProviders) {
+				const providerInstance = instantiationService.createInstance(OAICompatibleLMProvider, customProvider.name, customProvider.url, this._byokStorageService);
+				this._providers.set(customProvider.name.toLowerCase(), providerInstance);
+			}
 
 			for (const [providerName, provider] of this._providers) {
 				this._store.add(lm.registerLanguageModelChatProvider(providerName, provider));

@@ -1,3 +1,18 @@
+本工程为官方工程的魔改版
+支持openai兼容的三方大模型调用，使用方法
+
+模型列表点击管理模型
+1. 点击OpenAI Compatible按钮条目右侧的设置
+2. 选择Configure Models
+3. 选择Add New Model
+4. 看到Enter a unique identifier for this model时输入模型名称（此处必须和官方模型名称保持一致，如qwen3-max），输入完毕回车
+5. 看到Enter a display name for this model时输入模型显示的名称会出现在UI上（此处可自定义），输入完毕回车
+6. 看到Enter the API endpoint URLl时输入模型调用的Url网址，根据模型提供者的官方文档来
+7. 看到Select model capabilities (use space to toggle, press Enter to confirm)时根据模型能力进行选择，以qwen3-max为例则需要选择Tool Calling和Requires API Key
+8. 看到Enter the maximum number of input tokens时输入模型的最大输入token长度，以qwen3-max为例则需要填252000，输入完毕回车
+9. 看到Enter the maximum number of output tokens时输入模型的最大输出token长度，以qwen3-max为例则需要填32000，输入完毕回车
+这样就添加完毕了，在模型列表切换成自己创建的三方模型，第一次用的时候需要输入API key这个根据自己的API key设置。
+
 # GitHub Copilot - Your AI peer programmer
 
 **[GitHub Copilot](https://code.visualstudio.com/docs/copilot/overview)** is an AI peer programming tool that helps you write code faster and smarter.
