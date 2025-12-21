@@ -5,9 +5,8 @@
 
 import * as vscode from 'vscode';
 import { ChatExtendedRequestHandler } from 'vscode';
-import { localize } from '../../../util/vs/nls';
 import { ClaudeAgentManager } from '../../agents/claude/node/claudeCodeAgent';
-import { ClaudeChatSessionItemProvider } from './claudeChatSessionItemProvider';
+import { ClaudeChatSessionItemProvider, ClaudeSessionUri } from './claudeChatSessionItemProvider';
 
 export class ClaudeChatSessionParticipant {
 	constructor(
@@ -24,7 +23,7 @@ export class ClaudeChatSessionParticipant {
 		const create = async () => {
 			const { claudeSessionId } = await this.claudeAgentManager.handleRequest(undefined, request, context, stream, token);
 			if (!claudeSessionId) {
-				stream.warning(localize('claude.failedToCreateSession', "Failed to create a new Claude Code session."));
+				stream.warning(vscode.l10n.t("Failed to create a new Claude Code session."));
 				return undefined;
 			}
 			return claudeSessionId;
@@ -36,20 +35,23 @@ export class ClaudeChatSessionParticipant {
 				const claudeSessionId = await create();
 				if (claudeSessionId) {
 					// Tell UI to replace with claude-backed session
-					this.sessionItemProvider.swap(chatSessionContext.chatSessionItem, { id: claudeSessionId, label: request.prompt ?? 'Claude Code' });
+					this.sessionItemProvider.swap(chatSessionContext.chatSessionItem, {
+						resource: ClaudeSessionUri.forSessionId(claudeSessionId),
+						label: request.prompt ?? 'Claude Code'
+					});
 				}
 				return {};
 			}
 
 			/* Existing session */
-			const { id } = chatSessionContext.chatSessionItem;
+			const id = ClaudeSessionUri.getId(chatSessionContext.chatSessionItem.resource);
 			await this.claudeAgentManager.handleRequest(id, request, context, stream, token);
 			return {};
 		}
 		/* Via @claude */
 		// TODO: Think about how this should work
-		stream.markdown(localize('claude.viaAtClaude', "Start a new Claude Code session"));
-		stream.button({ command: `workbench.action.chat.openNewSessionEditor.${this.sessionType}`, title: localize('claude.startNewSession', "Start Session") });
+		stream.markdown(vscode.l10n.t("Start a new Claude Code session"));
+		stream.button({ command: `workbench.action.chat.openNewSessionEditor.${this.sessionType}`, title: vscode.l10n.t("Start Session") });
 		return {};
 	}
 }

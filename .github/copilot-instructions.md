@@ -9,7 +9,7 @@ This is the **GitHub Copilot Chat** extension for Visual Studio Code - a VS Code
 - **Inline Chat**: AI-powered editing directly in the editor with `Ctrl+I`
 - **Agent Mode**: Multi-step autonomous coding tasks
 - **Edit Mode**: Natural language to code
-- **Code Completions**: Next edit suggestions and inline completions
+- **Inline Suggestions**: Next edit suggestions and inline completions
 - **Language Model Integration**: Support for multiple AI models (GPT-4, Claude, Gemini, etc.)
 - **Context-Aware**: Workspace understanding, semantic search, and code analysis
 
@@ -268,7 +268,7 @@ The extension uses numerous proposed VS Code APIs for advanced functionality:
 - `languageModelSystem`: System messages for LM API
 - `chatProvider`: Custom chat provider implementation
 - `mappedEditsProvider`: Advanced editing capabilities
-- `inlineCompletionsAdditions`: Enhanced inline completions
+- `inlineCompletionsAdditions`: Enhanced inline suggestions
 - `aiTextSearchProvider`: AI-powered search capabilities
 
 ### External Integrations
@@ -339,5 +339,5 @@ The extension uses numerous proposed VS Code APIs for advanced functionality:
 This extension is a complex, multi-layered system that provides comprehensive AI assistance within VS Code. Understanding the service architecture, contribution system, and separation between platform and extension layers is crucial for making effective changes.
 
 ## Best Practices
-- Use services and dependency injection whenever possible instead of using node or vscode APIs directly. For example, use `IFileService` instead of node's `fs`.
+- Use services and dependency injection whenever possible instead of using node or vscode APIs directly. For example, use `IFileSystemService` instead of node's `fs`.
 - Always use the URI type instead of using string file paths. There are many helpers available for working with URIs.

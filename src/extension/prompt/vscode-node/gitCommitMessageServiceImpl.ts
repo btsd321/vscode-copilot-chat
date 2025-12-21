@@ -3,7 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { ProgressLocation, Uri, l10n, window } from 'vscode';
+import * as l10n from '@vscode/l10n';
+import { ProgressLocation, Uri, window } from 'vscode';
 import { compute4GramTextSimilarity } from '../../../platform/editSurvivalTracking/common/editSurvivalTracker';
 import { IGitCommitMessageService } from '../../../platform/git/common/gitCommitMessageService';
 import { IGitDiffService } from '../../../platform/git/common/gitDiffService';
@@ -12,6 +13,7 @@ import { API, Repository } from '../../../platform/git/vscode/git';
 import { ITelemetryService } from '../../../platform/telemetry/common/telemetry';
 import { CancellationToken } from '../../../util/vs/base/common/cancellation';
 import { DisposableMap, DisposableStore } from '../../../util/vs/base/common/lifecycle';
+import { basename } from '../../../util/vs/base/common/resources';
 import { IInstantiationService } from '../../../util/vs/platform/instantiation/common/instantiation';
 import { RecentCommitMessages } from '../common/repository';
 import { GitCommitMessageGenerator } from '../node/gitCommitMessageGenerator';
@@ -67,6 +69,13 @@ export class GitCommitMessageServiceImpl implements IGitCommitMessageService {
 		}
 
 		return window.withProgress({ location: ProgressLocation.SourceControl }, async () => {
+			try {
+				// Explicitly refresh (best effort) the repository state to make
+				// sure that the repository state is up-to-date before generating
+				// the commit message.
+				await repository.status();
+			} catch (err) { }
+
 			const indexChanges = repository.state.indexChanges.length;
 			const workingTreeChanges = repository.state.workingTreeChanges.length;
 			const untrackedChanges = repository.state.untrackedChanges?.length ?? 0;
@@ -96,8 +105,10 @@ export class GitCommitMessageServiceImpl implements IGitCommitMessageService {
 			const attemptCount = this._getAttemptCount(repository, diffs);
 			const recentCommitMessages = await this._getRecentCommitMessages(repository);
 
+			const repositoryName = basename(repository.rootUri);
+			const branchName = repository.state.HEAD?.name ?? '';
 			const gitCommitMessageGenerator = this._instantiationService.createInstance(GitCommitMessageGenerator);
-			const commitMessage = await gitCommitMessageGenerator.generateGitCommitMessage(changes, recentCommitMessages, attemptCount, cancellationToken);
+			const commitMessage = await gitCommitMessageGenerator.generateGitCommitMessage(repositoryName, branchName, changes, recentCommitMessages, attemptCount, cancellationToken);
 
 			// Save generated commit message
 			if (commitMessage && repository.state.HEAD && repository.state.HEAD.commit) {

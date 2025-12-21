@@ -28,7 +28,7 @@ import { IFileSystemService } from '../../filesystem/common/fileSystemService';
 import { FileType, RelativePattern } from '../../filesystem/common/fileTypes';
 import { NodeFileSystemService } from '../../filesystem/node/fileSystemServiceImpl';
 import { IGitService, RepoContext } from '../../git/common/gitService';
-import { Change } from '../../git/vscode/git';
+import { Change, CommitShortStat } from '../../git/vscode/git';
 import { AbstractLanguageDiagnosticsService } from '../../languages/common/languageDiagnosticsService';
 import { ILanguageFeaturesService } from '../../languages/common/languageFeaturesService';
 import { ILogService } from '../../log/common/logService';
@@ -135,7 +135,7 @@ export class SimulationLanguageDiagnosticsService extends AbstractLanguageDiagno
 	override onDidChangeDiagnostics: vscode.Event<vscode.DiagnosticChangeEvent> = this.workspace.onDidChangeDiagnostics;
 	override getDiagnostics: (resource: vscode.Uri) => vscode.Diagnostic[] = this.workspace.getDiagnostics.bind(this.workspace);
 	override getAllDiagnostics(): [vscode.Uri, vscode.Diagnostic[]][] {
-		return [];
+		return this.workspace.getAllDiagnostics();
 	}
 }
 
@@ -235,7 +235,7 @@ export class SimulationFileSystemAdaptor implements IFileSystemService {
 		return this._delegate.isWritableFileSystem(scheme);
 	}
 
-	createFileSystemWatcher(glob: string): vscode.FileSystemWatcher {
+	createFileSystemWatcher(glob: string | vscode.RelativePattern): vscode.FileSystemWatcher {
 		return this._delegate.createFileSystemWatcher(glob);
 	}
 }
@@ -263,7 +263,7 @@ export class SimulationReviewService implements IReviewService {
 	}
 
 	isCodeFeedbackEnabled(): boolean {
-		if (ConfigValueValidators.isDefaultValueWithTeamValue(ConfigKey.CodeFeedback.defaultValue)) {
+		if (ConfigValueValidators.isCustomTeamDefaultValue(ConfigKey.CodeFeedback.defaultValue)) {
 			return ConfigKey.CodeFeedback.defaultValue.defaultValue;
 		}
 		return ConfigKey.CodeFeedback.defaultValue;
@@ -274,10 +274,10 @@ export class SimulationReviewService implements IReviewService {
 	}
 
 	isIntentEnabled(): boolean {
-		if (ConfigValueValidators.isDefaultValueWithTeamValue(ConfigKey.Internal.ReviewIntent.defaultValue)) {
-			return ConfigKey.Internal.ReviewIntent.defaultValue.defaultValue;
+		if (ConfigValueValidators.isCustomTeamDefaultValue(ConfigKey.Advanced.ReviewIntent.defaultValue)) {
+			return ConfigKey.Advanced.ReviewIntent.defaultValue.defaultValue;
 		}
-		return ConfigKey.Internal.ReviewIntent.defaultValue;
+		return ConfigKey.Advanced.ReviewIntent.defaultValue;
 	}
 
 	getDiagnosticCollection(): ReviewDiagnosticCollection {
@@ -674,7 +674,7 @@ export class TestingGitService implements IGitService {
 	}
 
 	// TODO implement later if tests use this, only used by ignore service
-	getRepository(uri: URI): Promise<RepoContext | undefined> {
+	getRepository(uri: URI, forceOpen?: boolean): Promise<RepoContext | undefined> {
 		return Promise.resolve(undefined);
 	}
 
@@ -741,12 +741,32 @@ export class TestingGitService implements IGitService {
 		return undefined;
 	}
 
+	async diffIndexWithHEADShortStats(uri: URI): Promise<CommitShortStat | undefined> {
+		return undefined;
+	}
+
 	async fetch(uri: URI, remote?: string, ref?: string, depth?: number): Promise<void> {
 		return;
 	}
 
 	async getMergeBase(uri: URI, ref1: string, ref2: string): Promise<string | undefined> {
 		return undefined;
+	}
+
+	async add(uri: URI, paths: string[]): Promise<void> {
+		return;
+	}
+
+	async createWorktree(uri: URI, options?: { path?: string; commitish?: string; branch?: string }): Promise<string | undefined> {
+		return undefined;
+	}
+
+	async deleteWorktree(uri: URI, path: string, options?: { force?: boolean }): Promise<void> {
+		return;
+	}
+
+	async migrateChanges(uri: URI, sourceRepositoryUri: URI, options?: { confirmation?: boolean; deleteFromSource?: boolean; untracked?: boolean }): Promise<void> {
+		return;
 	}
 }
 
@@ -776,11 +796,13 @@ export class TestingTerminalService extends Disposable implements ITerminalServi
 
 	private readonly sessionTerminals = new Map<string, { terminal: vscode.Terminal; shellIntegrationQuality: ShellIntegrationQuality; id: string }[]>();
 
-	createTerminal(name?: string, shellPath?: string, shellArgs?: readonly string[] | string): vscode.Terminal;
+	createTerminal(name?: string, shellPath?: string, shellArgs?: string[] | string): vscode.Terminal;
 	createTerminal(options: vscode.TerminalOptions): vscode.Terminal;
 	createTerminal(options: vscode.ExtensionTerminalOptions): vscode.Terminal;
-	createTerminal(name?: any, shellPath?: any, shellArgs?: any): vscode.Terminal {
-		const options: vscode.TerminalOptions | vscode.ExtensionTerminalOptions = typeof name === 'string' ? { name, shellPath, shellArgs } : name;
+	createTerminal(nameOrOpts?: string | vscode.TerminalOptions | vscode.ExtensionTerminalOptions, shellPath?: string, shellArgs?: string[] | string): vscode.Terminal {
+		const options: vscode.TerminalOptions | vscode.ExtensionTerminalOptions = typeof nameOrOpts === 'string' || nameOrOpts === undefined ?
+			{ name: nameOrOpts, shellPath, shellArgs } satisfies vscode.TerminalOptions :
+			nameOrOpts;
 		if ('pty' in options) {
 			throw new Error('Not implemented');
 		}
@@ -838,7 +860,7 @@ export class TestingTerminalService extends Disposable implements ITerminalServi
 	getBufferWithPid(pid: number, maxChars?: number): Promise<string> {
 		throw new Error('Method not implemented.');
 	}
-	contributePath(contributor: string, pathLocation: string, description?: string): void {
+	contributePath(contributor: string, pathLocation: string, description?: string | { command: string }): void {
 		// No-op for test service
 	}
 	removePathContribution(contributor: string): void {

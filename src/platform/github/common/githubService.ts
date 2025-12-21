@@ -3,15 +3,28 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { Endpoints } from "@octokit/types";
+import type { Endpoints } from '@octokit/types';
 import { createServiceIdentifier } from '../../../util/common/services';
+import { decodeBase64 } from '../../../util/vs/base/common/buffer';
 import { ICAPIClientService } from '../../endpoint/common/capiClient';
 import { ILogService } from '../../log/common/logService';
 import { IFetcherService } from '../../networking/common/fetcherService';
 import { ITelemetryService } from '../../telemetry/common/telemetry';
-import { makeGitHubAPIRequest, makeSearchGraphQLRequest, PullRequestSearchItem, SessionInfo } from './githubAPI';
+import { addPullRequestCommentGraphQLRequest, closePullRequest, getPullRequestFromGlobalId, makeGitHubAPIRequest, makeSearchGraphQLRequest, PullRequestComment, PullRequestSearchItem, SessionInfo } from './githubAPI';
 
-export type IGetRepositoryInfoResponseData = Endpoints["GET /repos/{owner}/{repo}"]["response"]["data"];
+/**
+ * Options for controlling authentication behavior in OctoKit service methods.
+ */
+export interface AuthOptions {
+	/**
+	 * If true, prompts the user to sign in if no authentication token is available.
+	 * If false or undefined, fails silently without prompting.
+	 * @default false
+	 */
+	readonly createIfNone?: boolean;
+}
+
+export type IGetRepositoryInfoResponseData = Endpoints['GET /repos/{owner}/{repo}']['response']['data'];
 
 export const IGithubRepositoryService = createServiceIdentifier<IGithubRepositoryService>('IGithubRepositoryService');
 export const IOctoKitService = createServiceIdentifier<IOctoKitService>('IOctoKitService');
@@ -90,20 +103,6 @@ export interface IOctoKitSessionInfo {
 	created_at: string;
 }
 
-export interface IOctoKitPullRequestInfo {
-	number: number;
-	title: string;
-	additions: number;
-	deletions: number;
-	headRepository: {
-		name: string;
-		owner: {
-			login: string;
-		};
-		url: string;
-	};
-}
-
 export interface RemoteAgentJobResponse {
 	job_id: string;
 	session_id: string;
@@ -113,6 +112,10 @@ export interface RemoteAgentJobResponse {
 	};
 	created_at: string;
 	updated_at: string;
+}
+
+export interface ErrorResponseWithStatusCode {
+	status: number;
 }
 
 export interface RemoteAgentJobPayload {
@@ -126,6 +129,82 @@ export interface RemoteAgentJobPayload {
 		head_ref?: string;
 	};
 	run_name?: string;
+	custom_agent?: string;
+}
+
+export interface CustomAgentListItem {
+	name: string;
+	repo_owner_id: number;
+	repo_owner: string;
+	repo_id: number;
+	repo_name: string;
+	display_name: string;
+	description: string;
+	tools: string[];
+	version: string;
+	argument_hint?: string;
+	metadata?: Record<string, string>;
+	target?: string;
+	config_error?: string;
+	model?: string;
+	infer?: boolean;
+	'mcp-servers'?: {
+		[serverName: string]: {
+			type: string;
+			command?: string;
+			args?: string[];
+			tools?: string[];
+			env?: { [key: string]: string };
+			headers?: { [key: string]: string };
+		};
+	};
+}
+
+export interface CustomAgentListOptions {
+	target?: 'github-copilot' | 'vscode';
+	excludeInvalidConfig?: boolean;
+	dedupe?: boolean;
+	includeSources?: ('repo' | 'org' | 'enterprise')[];
+}
+
+export interface CustomAgentListOptions {
+	target?: 'github-copilot' | 'vscode';
+	excludeInvalidConfig?: boolean;
+	dedupe?: boolean;
+	includeSources?: ('repo' | 'org' | 'enterprise')[];
+}
+
+export interface CustomAgentDetails extends CustomAgentListItem {
+	prompt: string;
+}
+
+export interface PullRequestFile {
+	filename: string;
+	status: 'added' | 'removed' | 'modified' | 'renamed' | 'copied' | 'changed' | 'unchanged';
+	additions: number;
+	deletions: number;
+	changes: number;
+	patch?: string;
+	previous_filename?: string;
+	sha?: string;
+}
+
+interface GitHubContentResponse {
+	content?: string;
+	encoding?: string;
+	sha?: string;
+}
+
+interface GitHubBlobResponse {
+	content: string;
+	encoding: string;
+}
+
+export class PermissiveAuthRequiredError extends Error {
+	constructor() {
+		super('Permissive authentication is required');
+		this.name = 'PermissiveAuthRequiredError';
+	}
 }
 
 export interface IOctoKitService {
@@ -138,45 +217,142 @@ export interface IOctoKitService {
 	getCurrentAuthedUser(): Promise<IOctoKitUser | undefined>;
 
 	/**
-	 * Queries for team membership of the currently authenticated user against the team id.
-	 * @returns The team membership or undefined if the user is not a member of the team
-	 */
-	getTeamMembership(teamId: number): Promise<any | undefined>;
-
-	/**
 	 * Returns the list of Copilot pull requests for a given user on a specific repo.
+	 * @param authOptions - Authentication options. By default, uses silent auth and returns empty array if not authenticated.
 	 */
-	getCopilotPullRequestsForUser(owner: string, repo: string): Promise<PullRequestSearchItem[]>;
+	getCopilotPullRequestsForUser(owner: string, repo: string, authOptions: AuthOptions): Promise<PullRequestSearchItem[]>;
 
 	/**
 	 * Returns the list of Copilot sessions for a given pull request.
+	 * @param authOptions - Authentication options. By default, uses silent auth and throws {@link PermissiveAuthRequiredError} if not authenticated.
 	 */
-	getCopilotSessionsForPR(prId: string): Promise<SessionInfo[]>;
+	getCopilotSessionsForPR(prId: string, authOptions: AuthOptions): Promise<SessionInfo[]>;
 
 	/**
 	 * Returns the logs for a specific Copilot session.
+	 * @param authOptions - Authentication options. By default, uses silent auth and throws {@link PermissiveAuthRequiredError} if not authenticated.
 	 */
-	getSessionLogs(sessionId: string): Promise<string>;
+	getSessionLogs(sessionId: string, authOptions: AuthOptions): Promise<string>;
 
 	/**
 	 * Returns the information for a specific Copilot session.
+	 * @param authOptions - Authentication options. By default, uses silent auth and throws {@link PermissiveAuthRequiredError} if not authenticated.
 	 */
-	getSessionInfo(sessionId: string): Promise<SessionInfo>;
+	getSessionInfo(sessionId: string, authOptions: AuthOptions): Promise<SessionInfo | undefined>;
 
 	/**
 	 * Posts a new Copilot agent job.
+	 * @param authOptions - Authentication options. By default, uses silent auth and throws {@link PermissiveAuthRequiredError} if not authenticated.
 	 */
 	postCopilotAgentJob(
 		owner: string,
 		name: string,
 		apiVersion: string,
 		payload: RemoteAgentJobPayload,
-	): Promise<RemoteAgentJobResponse>;
+		authOptions: AuthOptions,
+	): Promise<RemoteAgentJobResponse | ErrorResponseWithStatusCode | undefined>;
 
 	/**
 	 * Gets a job by its job ID.
+	 * @param authOptions - Authentication options. By default, uses silent auth and throws {@link PermissiveAuthRequiredError} if not authenticated.
 	 */
-	getJobByJobId(owner: string, repo: string, jobId: string, userAgent: string): Promise<JobInfo>;
+	getJobByJobId(owner: string, repo: string, jobId: string, userAgent: string, authOptions: AuthOptions): Promise<JobInfo | undefined>;
+
+	/**
+	 * Gets a job by session ID
+	 * @param authOptions - Authentication options. By default, uses silent auth and throws {@link PermissiveAuthRequiredError} if not authenticated.
+	 */
+	getJobBySessionId(owner: string, repo: string, sessionId: string, userAgent: string, authOptions: AuthOptions): Promise<JobInfo | undefined>;
+
+	/**
+	 * Adds a comment to a pull request.
+	 * @param authOptions - Authentication options. By default, uses silent auth and throws {@link PermissiveAuthRequiredError} if not authenticated.
+	 */
+	addPullRequestComment(pullRequestId: string, commentBody: string, authOptions: AuthOptions): Promise<PullRequestComment | null>;
+
+	/**
+	 * Gets all open Copilot sessions.
+	 * @param authOptions - Authentication options. By default, uses silent auth and throws {@link PermissiveAuthRequiredError} if not authenticated.
+	 */
+	getAllSessions(nwo: string | undefined, open: boolean, authOptions: AuthOptions): Promise<SessionInfo[]>;
+
+	/**
+	 * Gets pull request from global id.
+	 * @param authOptions - Authentication options. By default, uses silent auth and throws {@link PermissiveAuthRequiredError} if not authenticated.
+	 */
+	getPullRequestFromGlobalId(globalId: string, authOptions: AuthOptions): Promise<PullRequestSearchItem | null>;
+
+	/**
+	 * Gets the list of custom agents available for a repository.
+	 * This includes both repo-level and org/enterprise-level custom agents.
+	 * @param owner The repository owner
+	 * @param repo The repository name
+	 * @param options Optional filtering options:
+	 *   - targetPlatform: Only include agents for the specified platform.
+	 *   - excludeInvalidConfigs: Exclude agents with invalid configurations.
+	 *   - deduplicate: Remove duplicate agents from the result.
+	 *   - source: Filter agents by their source (repo, org, enterprise).
+	 * @param authOptions - Authentication options. By default, uses silent auth and throws {@link PermissiveAuthRequiredError} if not authenticated.
+	 * @returns An array of custom agent list items with basic metadata
+	 */
+	getCustomAgents(owner: string, repo: string, options: CustomAgentListOptions, authOptions: AuthOptions): Promise<CustomAgentListItem[]>;
+
+	/**
+	 * Gets the full configuration for a specific custom agent.
+	 * @param owner The repository owner
+	 * @param repo The repository name
+	 * @param agentName The name of the custom agent
+	 * @param version Optional git ref (branch, tag, or commit SHA) to fetch from
+	 * @param authOptions - Authentication options. By default, uses silent auth and throws {@link PermissiveAuthRequiredError} if not authenticated.
+	 * @returns The complete custom agent configuration including the prompt
+	 */
+	getCustomAgentDetails(owner: string, repo: string, agentName: string, version: string, authOptions: AuthOptions): Promise<CustomAgentDetails | undefined>;
+
+	/**
+	 * Gets the list of files changed in a pull request.
+	 * @param owner The repository owner
+	 * @param repo The repository name
+	 * @param pullNumber The pull request number
+	 * @param authOptions - Authentication options. By default, uses silent auth and returns empty array if not authenticated.
+	 * @returns An array of changed files with their metadata
+	 */
+	getPullRequestFiles(owner: string, repo: string, pullNumber: number, authOptions: AuthOptions): Promise<PullRequestFile[]>;
+
+	/**
+	 * Closes a pull request.
+	 * @param owner The repository owner
+	 * @param repo The repository name
+	 * @param pullNumber The pull request number
+	 * @param authOptions - Authentication options. By default, uses silent auth and returns false if not authenticated.
+	 * @returns A promise that resolves to true if the PR was successfully closed
+	 */
+	closePullRequest(owner: string, repo: string, pullNumber: number, authOptions: AuthOptions): Promise<boolean>;
+
+	/**
+	 * Get file content from a specific commit.
+	 * @param owner The repository owner
+	 * @param repo The repository name
+	 * @param ref The commit SHA, branch name, or tag
+	 * @param path The file path within the repository
+	 * @param authOptions - Authentication options. By default, uses silent auth and throws {@link PermissiveAuthRequiredError} if not authenticated.
+	 * @returns The file content as a string
+	 */
+	getFileContent(owner: string, repo: string, ref: string, path: string, authOptions: AuthOptions): Promise<string>;
+
+	/**
+	 * Gets the list of organizations that the authenticated user belongs to.
+	 * @param authOptions - Authentication options. By default, uses silent auth and throws {@link PermissiveAuthRequiredError} if not authenticated.
+	 * @returns An array of organization logins
+	 */
+	getUserOrganizations(authOptions: AuthOptions): Promise<string[]>;
+
+	/**
+	 * Gets the list of repositories for an organization.
+	 * @param org The organization name
+	 * @param authOptions - Authentication options. By default, uses silent auth and throws {@link PermissiveAuthRequiredError} if not authenticated.
+	 * @returns An array of repository names
+	 */
+	getOrganizationRepositories(org: string, authOptions: AuthOptions): Promise<string[]>;
 }
 
 /**
@@ -187,9 +363,9 @@ export interface IOctoKitService {
  */
 export class BaseOctoKitService {
 	constructor(
-		private readonly _capiClientService: ICAPIClientService,
+		protected readonly _capiClientService: ICAPIClientService,
 		private readonly _fetcherService: IFetcherService,
-		private readonly _logService: ILogService,
+		protected readonly _logService: ILogService,
 		private readonly _telemetryService: ITelemetryService
 	) { }
 
@@ -210,23 +386,77 @@ export class BaseOctoKitService {
 		return makeSearchGraphQLRequest(this._fetcherService, this._logService, this._telemetryService, this._capiClientService.dotcomAPIURL, token, query);
 	}
 
-	protected async getCopilotSessionsForPRWithToken(prId: string, token: string) {
-		return makeGitHubAPIRequest(this._fetcherService, this._logService, this._telemetryService, 'https://api.githubcopilot.com', `agents/sessions/resource/pull/${prId}`, 'GET', token);
+	protected async addPullRequestCommentWithToken(pullRequestId: string, commentBody: string, token: string): Promise<PullRequestComment | null> {
+		return addPullRequestCommentGraphQLRequest(this._fetcherService, this._logService, this._telemetryService, this._capiClientService.dotcomAPIURL, token, pullRequestId, commentBody);
 	}
 
-	protected async getSessionLogsWithToken(sessionId: string, token: string) {
-		return makeGitHubAPIRequest(this._fetcherService, this._logService, this._telemetryService, 'https://api.githubcopilot.com', `agents/sessions/${sessionId}/logs`, 'GET', token, undefined, undefined, 'text');
+	protected async getPullRequestFromSessionWithToken(globalId: string, token: string): Promise<PullRequestSearchItem | null> {
+		return getPullRequestFromGlobalId(this._fetcherService, this._logService, this._telemetryService, this._capiClientService.dotcomAPIURL, token, globalId);
 	}
 
-	protected async getSessionInfoWithToken(sessionId: string, token: string) {
-		return makeGitHubAPIRequest(this._fetcherService, this._logService, this._telemetryService, 'https://api.githubcopilot.com', `agents/sessions/${sessionId}`, 'GET', token, undefined, undefined, 'text');
+	protected async getPullRequestFilesWithToken(owner: string, repo: string, pullNumber: number, token: string): Promise<PullRequestFile[]> {
+		const result = await makeGitHubAPIRequest(this._fetcherService, this._logService, this._telemetryService, this._capiClientService.dotcomAPIURL, `repos/${owner}/${repo}/pulls/${pullNumber}/files`, 'GET', token, undefined, '2022-11-28');
+		return result || [];
 	}
 
-	protected async postCopilotAgentJobWithToken(owner: string, name: string, apiVersion: string, userAgent: string, payload: RemoteAgentJobPayload, token: string): Promise<RemoteAgentJobResponse> {
-		return makeGitHubAPIRequest(this._fetcherService, this._logService, this._telemetryService, 'https://api.githubcopilot.com', `agents/swe/${apiVersion}/jobs/${owner}/${name}`, 'POST', token, payload, undefined, undefined, userAgent);
+	protected async closePullRequestWithToken(owner: string, repo: string, pullNumber: number, token: string): Promise<boolean> {
+		return closePullRequest(this._fetcherService, this._logService, this._telemetryService, this._capiClientService.dotcomAPIURL, token, owner, repo, pullNumber);
 	}
 
-	protected async getJobByJobIdWithToken(owner: string, repo: string, jobId: string, userAgent: string, token: string): Promise<JobInfo> {
-		return makeGitHubAPIRequest(this._fetcherService, this._logService, this._telemetryService, 'https://api.githubcopilot.com', `agents/swe/v1/jobs/${owner}/${repo}/${jobId}`, 'GET', token, undefined, undefined, undefined, userAgent);
+	protected async getFileContentWithToken(owner: string, repo: string, ref: string, path: string, token: string): Promise<string> {
+		const route = `repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`;
+		const response = await makeGitHubAPIRequest(this._fetcherService, this._logService, this._telemetryService, this._capiClientService.dotcomAPIURL, route, 'GET', token, undefined);
+
+		if (!response || Array.isArray(response)) {
+			throw new Error('Unable to fetch file content');
+		}
+
+		const typedResponse = response as GitHubContentResponse;
+
+		if (typedResponse.content && typedResponse.encoding === 'base64') {
+			return decodeBase64(typedResponse.content.replace(/\n/g, '')).toString();
+		}
+
+		if (typedResponse.sha) {
+			const blob = await this.getBlobContentWithToken(owner, repo, typedResponse.sha, token);
+			if (blob) {
+				return blob;
+			}
+		}
+
+		this._logService.error(`Failed to get file content for ${owner}/${repo}/${path} at ref ${ref}`);
+		return '';
+	}
+
+	protected async getUserOrganizationsWithToken(token: string): Promise<string[]> {
+		const result = await this._makeGHAPIRequest('user/orgs', 'GET', token);
+		if (!result || !Array.isArray(result)) {
+			return [];
+		}
+		return result.map((org: { login: string }) => org.login);
+	}
+
+	protected async getOrganizationRepositoriesWithToken(org: string, token: string): Promise<string[]> {
+		const result = await this._makeGHAPIRequest(`orgs/${org}/repos?per_page=5&sort=updated`, 'GET', token);
+		if (!result || !Array.isArray(result) || result.length === 0) {
+			return [];
+		}
+		return result.map((repo: { name: string }) => repo.name);
+	}
+
+	private async getBlobContentWithToken(owner: string, repo: string, sha: string, token: string): Promise<string | undefined> {
+		const blobRoute = `repos/${owner}/${repo}/git/blobs/${sha}`;
+		const blobResponse = await makeGitHubAPIRequest(this._fetcherService, this._logService, this._telemetryService, this._capiClientService.dotcomAPIURL, blobRoute, 'GET', token, undefined, '2022-11-28');
+
+		if (!blobResponse || Array.isArray(blobResponse)) {
+			return undefined;
+		}
+
+		const typedBlob = blobResponse as GitHubBlobResponse;
+		if (typedBlob.content && typedBlob.encoding === 'base64') {
+			return decodeBase64(typedBlob.content.replace(/\n/g, '')).toString();
+		}
+
+		return undefined;
 	}
 }

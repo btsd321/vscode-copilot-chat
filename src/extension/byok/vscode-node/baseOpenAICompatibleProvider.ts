@@ -17,11 +17,11 @@ import { promptForAPIKey } from './byokUIService';
 export abstract class BaseOpenAICompatibleLMProvider implements BYOKModelProvider<LanguageModelChatInformation> {
 
 	private readonly _lmWrapper: CopilotLanguageModelWrapper;
-	private _apiKey: string | undefined;
+	protected _apiKey: string | undefined;
 	constructor(
 		public readonly authType: BYOKAuthType,
 		private readonly _name: string,
-		private readonly _baseUrl: string,
+		protected readonly _baseUrl: string,
 		protected _knownModels: BYOKKnownModels | undefined,
 		private readonly _byokStorageService: IBYOKStorageService,
 		@IFetcherService protected readonly _fetcherService: IFetcherService,
@@ -81,11 +81,17 @@ export abstract class BaseOpenAICompatibleLMProvider implements BYOKModelProvide
 				}
 			}
 		} catch (e) {
+			// Likely bad API key so we will prompt user to update it one more time
+			if (!options.silent && e instanceof Error && e.message.includes('key')) {
+				await this.updateAPIKey();
+				// Silent as to not prompt the user again
+				return this.provideLanguageModelChatInformation({ silent: true }, token);
+			}
 			this._logService.error(e, `Error fetching available ${this._name} models`);
 			return [];
 		}
 	}
-	async provideLanguageModelChatResponse(model: LanguageModelChatInformation, messages: Array<LanguageModelChatMessage | LanguageModelChatMessage2>, options: ProvideLanguageModelChatResponseOptions, progress: Progress<LanguageModelResponsePart2>, token: CancellationToken): Promise<any> {
+	async provideLanguageModelChatResponse(model: LanguageModelChatInformation, messages: Array<LanguageModelChatMessage | LanguageModelChatMessage2>, options: ProvideLanguageModelChatResponseOptions, progress: Progress<LanguageModelResponsePart2>, token: CancellationToken): Promise<void> {
 		const openAIChatEndpoint = await this.getEndpointImpl(model);
 		return this._lmWrapper.provideLanguageModelResponse(openAIChatEndpoint, messages, options, options.requestInitiator, progress, token);
 	}

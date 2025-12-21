@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { RequestType } from '@vscode/copilot-api';
+import * as l10n from '@vscode/l10n';
 import * as readline from 'readline';
 import type { Selection, TextDocument, TextEditor } from 'vscode';
 import { IAuthenticationService } from '../../../platform/authentication/common/authentication';
@@ -24,7 +25,7 @@ import { IWorkspaceService } from '../../../platform/workspace/common/workspaceS
 import { CancellationToken } from '../../../util/vs/base/common/cancellation';
 import * as path from '../../../util/vs/base/common/path';
 import { generateUuid } from '../../../util/vs/base/common/uuid';
-import { l10n, MarkdownString, Range, Uri } from '../../../vscodeTypes';
+import { MarkdownString, Range, Uri } from '../../../vscodeTypes';
 import { FeedbackResult } from '../../prompt/node/feedbackGenerator';
 
 
@@ -212,7 +213,9 @@ function createReviewComment(ghComment: ResponseComment | ExcludedComment, reque
 	const range = new Range(fromLine.lineNumber, fromLine.firstNonWhitespaceCharacterIndex, fromLine.lineNumber, lastNonWhitespaceCharacterIndex);
 	const raw = ghComment.data.body;
 	// Remove suggestion because that interfers with our own suggestion rendering later.
-	const content = removeSuggestion(raw);
+	const { content, suggestions } = removeSuggestion(raw);
+	const startLine = typeof ghComment.data.start_line === 'number' ? ghComment.data.start_line : ghComment.data.line;
+	const suggestionRange = new Range(startLine - 1, 0, ghComment.data.line, 0);
 	const comment: ReviewComment = {
 		request,
 		document: TextDocumentSnapshot.create(document),
@@ -224,13 +227,32 @@ function createReviewComment(ghComment: ResponseComment | ExcludedComment, reque
 		severity: 'medium',
 		originalIndex: index,
 		actionCount: 0,
+		skipSuggestion: true,
+		suggestion: {
+			markdown: '',
+			edits: suggestions.map(suggestion => {
+				const oldText = document.getText(suggestionRange);
+				return {
+					range: suggestionRange,
+					newText: suggestion,
+					oldText,
+				};
+			}),
+		},
 	};
 	return comment;
 }
 
 const SUGGESTION_EXPRESSION = /```suggestion(\u0020*(\r\n|\n))((?<suggestion>[\s\S]*?)(\r\n|\n))?```/g;
 function removeSuggestion(body: string) {
-	return body.replaceAll(SUGGESTION_EXPRESSION, '');
+	const suggestions: string[] = [];
+	const content = body.replaceAll(SUGGESTION_EXPRESSION, (_match, _ws, _nl, suggestion) => {
+		if (suggestion) {
+			suggestions.push(suggestion);
+		}
+		return '';
+	});
+	return { content, suggestions };
 }
 
 // Represents the "before" or "after" state of a file, sent to the agent
@@ -279,6 +301,7 @@ interface ResponseComment {
 		line: number;
 		// The body of the comment, including a ```suggestion block if there is a suggested change
 		body: string;
+		start_line?: number;
 	};
 }
 
@@ -288,6 +311,7 @@ interface ExcludedComment {
 		path: string;
 		line: number;
 		body: string;
+		start_line?: number;
 		exclusion_reason: 'denylisted_type' | 'unknown';
 	};
 }
@@ -334,7 +358,7 @@ async function fetchComments(logService: ILogService, authService: IAuthenticati
 		messages: [{
 			role: 'user',
 			...(kind === 'selection' ? {
-				review_type: "snippet",
+				review_type: 'snippet',
 				snippet_files: headFileContents.map(f => ({
 					path: f.path,
 					regions: [

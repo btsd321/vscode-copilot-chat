@@ -4,16 +4,16 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { GenerateContentParameters, GoogleGenAI, Tool, Type } from '@google/genai';
-import { CancellationToken, LanguageModelChatInformation, LanguageModelChatMessage, LanguageModelChatMessage2, LanguageModelResponsePart2, LanguageModelTextPart, LanguageModelToolCallPart, Progress, ProvideLanguageModelChatResponseOptions } from 'vscode';
+import { CancellationToken, LanguageModelChatInformation, LanguageModelChatMessage, LanguageModelChatMessage2, LanguageModelResponsePart2, LanguageModelTextPart, LanguageModelThinkingPart, LanguageModelToolCallPart, Progress, ProvideLanguageModelChatResponseOptions } from 'vscode';
 import { ChatFetchResponseType, ChatLocation } from '../../../platform/chat/common/commonTypes';
 import { ILogService } from '../../../platform/log/common/logService';
 import { IResponseDelta, OpenAiFunctionTool } from '../../../platform/networking/common/fetch';
 import { APIUsage } from '../../../platform/networking/common/openai';
 import { IRequestLogger } from '../../../platform/requestLogger/node/requestLogger';
+import { toErrorMessage } from '../../../util/common/errorMessage';
 import { RecordedProgress } from '../../../util/common/progressRecorder';
-import { toErrorMessage } from '../../../util/vs/base/common/errorMessage';
 import { generateUuid } from '../../../util/vs/base/common/uuid';
-import { BYOKAuthType, BYOKKnownModels, byokKnownModelsToAPIInfo, BYOKModelCapabilities, BYOKModelProvider, LMResponsePart } from '../common/byokProvider';
+import { BYOKAuthType, BYOKKnownModels, byokKnownModelsToAPIInfo, BYOKModelCapabilities, BYOKModelProvider, handleAPIKeyUpdate, LMResponsePart } from '../common/byokProvider';
 import { toGeminiFunction as toGeminiFunctionDeclaration, ToolJsonSchema } from '../common/geminiFunctionDeclarationConverter';
 import { apiMessageToGeminiMessage, geminiMessagesToRawMessagesForLogging } from '../common/geminiMessageConverter';
 import { IBYOKStorageService } from './byokStorageService';
@@ -59,9 +59,10 @@ export class GeminiNativeBYOKLMProvider implements BYOKModelProvider<LanguageMod
 	}
 
 	async updateAPIKey(): Promise<void> {
-		this._apiKey = await promptForAPIKey(GeminiNativeBYOKLMProvider.providerName, await this._byokStorageService.getAPIKey(GeminiNativeBYOKLMProvider.providerName) !== undefined);
-		if (this._apiKey) {
-			await this._byokStorageService.storeAPIKey(GeminiNativeBYOKLMProvider.providerName, this._apiKey, BYOKAuthType.GlobalApiKey);
+		const result = await handleAPIKeyUpdate(GeminiNativeBYOKLMProvider.providerName, this._byokStorageService, promptForAPIKey);
+		if (!result.cancelled) {
+			this._apiKey = result.apiKey;
+			this._genAIClient = undefined;
 		}
 	}
 
@@ -108,14 +109,16 @@ export class GeminiNativeBYOKLMProvider implements BYOKModelProvider<LanguageMod
 				messages: geminiMessagesToRawMessagesForLogging(contents, systemInstruction),
 				ourRequestId: requestId,
 				location: ChatLocation.Other,
-				tools: options.tools?.map((tool): OpenAiFunctionTool => ({
-					type: 'function',
-					function: {
-						name: tool.name,
-						description: tool.description,
-						parameters: tool.inputSchema
-					}
-				})),
+				body: {
+					tools: options.tools?.map((tool): OpenAiFunctionTool => ({
+						type: 'function',
+						function: {
+							name: tool.name,
+							description: tool.description,
+							parameters: tool.inputSchema
+						}
+					}))
+				}
 			});
 
 		// Convert VS Code tools to Gemini function declarations
@@ -154,6 +157,9 @@ export class GeminiNativeBYOKLMProvider implements BYOKModelProvider<LanguageMod
 				systemInstruction: systemInstruction,
 				tools: tools.length > 0 ? tools : undefined,
 				maxOutputTokens: model.maxOutputTokens,
+				thinkingConfig: {
+					includeThoughts: true,
+				},
 				abortSignal: abortController.signal
 			}
 		};
@@ -170,6 +176,7 @@ export class GeminiNativeBYOKLMProvider implements BYOKModelProvider<LanguageMod
 				requestId,
 				serverRequestId: requestId,
 				usage: result.usage,
+				resolvedModel: model.id,
 				value: ['value'],
 			}, wrappedProgress.items.map((i): IResponseDelta => {
 				return {
@@ -221,7 +228,6 @@ export class GeminiNativeBYOKLMProvider implements BYOKModelProvider<LanguageMod
 			const stream = await this._genAIClient.models.generateContentStream(params);
 
 			let usage: APIUsage | undefined;
-			let hasText = false;
 
 			for await (const chunk of stream) {
 				if (token.isCancellationRequested) {
@@ -241,9 +247,11 @@ export class GeminiNativeBYOKLMProvider implements BYOKModelProvider<LanguageMod
 
 					if (candidate.content && candidate.content.parts) {
 						for (const part of candidate.content.parts) {
-							if (part.text) {
+							if ('thought' in part && part.thought === true && part.text) {
+								// Handle thinking/reasoning content from Gemini API
+								progress.report(new LanguageModelThinkingPart(part.text));
+							} else if (part.text) {
 								progress.report(new LanguageModelTextPart(part.text));
-								hasText ||= part.text.length > 0;
 							} else if (part.functionCall && part.functionCall.name) {
 								// Generate a synthetic call id
 								const callId = `${part.functionCall.name}_${Date.now()}`;

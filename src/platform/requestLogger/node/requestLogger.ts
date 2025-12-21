@@ -8,21 +8,17 @@ import { HTMLTracer, IChatEndpointInfo, Raw, RenderPromptResult } from '@vscode/
 import { AsyncLocalStorage } from 'async_hooks';
 import type { Event } from 'vscode';
 import { ChatFetchError, ChatFetchResponseType, ChatLocation, ChatResponses, FetchSuccess } from '../../../platform/chat/common/commonTypes';
-import { IResponseDelta, OpenAiFunctionTool, OpenAiResponsesFunctionTool, OptionalChatRequestParams } from '../../../platform/networking/common/fetch';
+import { IResponseDelta, OptionalChatRequestParams } from '../../../platform/networking/common/fetch';
 import { IChatEndpoint, IEndpointBody } from '../../../platform/networking/common/networking';
-import { Result } from '../../../util/common/result';
 import { createServiceIdentifier } from '../../../util/common/services';
 import { Disposable } from '../../../util/vs/base/common/lifecycle';
 import { ThemeIcon } from '../../../util/vs/base/common/themables';
-import { assertType } from '../../../util/vs/base/common/types';
 import { OffsetRange } from '../../../util/vs/editor/common/core/ranges/offsetRange';
-import type { ChatRequest, LanguageModelToolResult2 } from '../../../vscodeTypes';
+import type { LanguageModelToolResult2 } from '../../../vscodeTypes';
 import type { IModelAPIResponse } from '../../endpoint/common/endpointProvider';
-import { Completion } from '../../nesFetch/common/completionsAPI';
-import { CompletionsFetchFailure, ModelParams } from '../../nesFetch/common/completionsFetchService';
-import { IFetchRequestParams } from '../../nesFetch/node/completionsFetchServiceImpl';
 import { APIUsage } from '../../networking/common/openai';
 import { ThinkingData } from '../../thinking/common/thinking';
+import { CapturingToken } from '../common/capturingToken';
 
 export type UriData = { kind: 'request'; id: string } | { kind: 'latest' };
 
@@ -107,7 +103,7 @@ export interface ILoggedElementInfo {
 	tokens: number;
 	maxTokens: number;
 	trace: HTMLTracer;
-	chatRequest: ChatRequest | undefined;
+	token: CapturingToken | undefined;
 	toJSON(): object;
 }
 
@@ -115,7 +111,7 @@ export interface ILoggedRequestInfo {
 	kind: LoggedInfoKind.Request;
 	id: string;
 	entry: LoggedRequest;
-	chatRequest: ChatRequest | undefined;
+	token: CapturingToken | undefined;
 	toJSON(): object;
 }
 
@@ -125,7 +121,7 @@ export interface ILoggedToolCall {
 	name: string;
 	args: unknown;
 	response: LanguageModelToolResult2;
-	chatRequest: ChatRequest | undefined;
+	token: CapturingToken | undefined;
 	time: number;
 	thinking?: ThinkingData;
 	toJSON(): Promise<object>;
@@ -133,7 +129,6 @@ export interface ILoggedToolCall {
 
 export interface ILoggedPendingRequest {
 	messages: Raw.ChatMessage[];
-	tools: (OpenAiFunctionTool | OpenAiResponsesFunctionTool)[] | undefined;
 	ourRequestId: string;
 	model: string;
 	location: ChatLocation;
@@ -141,6 +136,7 @@ export interface ILoggedPendingRequest {
 	postOptions?: OptionalChatRequestParams;
 	body?: IEndpointBody;
 	ignoreStatefulMarker?: boolean;
+	isConversationRequest?: boolean;
 }
 
 export type LoggedInfo = ILoggedElementInfo | ILoggedRequestInfo | ILoggedToolCall;
@@ -152,15 +148,13 @@ export interface IRequestLogger {
 
 	promptRendererTracing: boolean;
 
-	captureInvocation<T>(request: ChatRequest, fn: () => Promise<T>): Promise<T>;
+	captureInvocation<T>(request: CapturingToken, fn: () => Promise<T>): Promise<T>;
 
 	logToolCall(id: string, name: string, args: unknown, response: LanguageModelToolResult2, thinking?: ThinkingData): void;
 
 	logModelListCall(requestId: string, requestMetadata: RequestMetadata, models: IModelAPIResponse[]): void;
 
 	logChatRequest(debugName: string, chatEndpoint: IChatEndpointLogInfo, chatParams: ILoggedPendingRequest): PendingLoggedChatRequest;
-
-	logCompletionRequest(debugName: string, chatEndpoint: IChatEndpointLogInfo, chatParams: ICompletionFetchRequestLogParams, requestId: string): PendingLoggedCompletionRequest;
 
 	addPromptTrace(elementName: string, endpoint: IChatEndpointInfo, result: RenderPromptResult, trace: HTMLTracer): void;
 	addEntry(entry: LoggedRequest): void;
@@ -176,26 +170,18 @@ export const enum LoggedRequestKind {
 	ChatMLSuccess = 'ChatMLSuccess',
 	ChatMLFailure = 'ChatMLFailure',
 	ChatMLCancelation = 'ChatMLCancelation',
-	CompletionSuccess = 'CompletionSuccess',
-	CompletionFailure = 'CompletionFailure',
 	MarkdownContentRequest = 'MarkdownContentRequest',
 }
 
 export type IChatEndpointLogInfo = Partial<Pick<IChatEndpoint, 'model' | 'modelMaxPromptTokens' | 'urlOrRequestMetadata'>>;
 
-export interface ICompletionFetchRequestLogParams extends IFetchRequestParams {
-	ourRequestId: string;
-	postOptions?: ModelParams;
-	location: ChatLocation;
-	intent?: false;
-}
-
 export interface ILoggedChatMLRequest {
 	debugName: string;
 	chatEndpoint: IChatEndpointLogInfo;
-	chatParams: ILoggedPendingRequest | ICompletionFetchRequestLogParams;
+	chatParams: ILoggedPendingRequest;
 	startTime: Date;
 	endTime: Date;
+	isConversationRequest?: boolean;
 }
 
 export interface ILoggedChatMLSuccessRequest extends ILoggedChatMLRequest {
@@ -222,19 +208,7 @@ export interface IMarkdownContentRequest {
 	icon: ThemeIcon | undefined;
 	debugName: string;
 	markdownContent: string;
-}
-
-export interface ILoggedCompletionSuccessRequest extends ILoggedChatMLRequest {
-	type: LoggedRequestKind.CompletionSuccess;
-	timeToFirstToken: number | undefined;
-	result: { type: ChatFetchResponseType.Success; value: string; requestId: string };
-	deltas?: undefined;
-}
-
-export interface ILoggedCompletionFailureRequest extends ILoggedChatMLRequest {
-	type: LoggedRequestKind.CompletionFailure;
-	timeToFirstToken: number | undefined;
-	result: { type: CompletionsFetchFailure | Error; requestId: string };
+	isConversationRequest?: boolean;
 }
 
 export type LoggedRequest = (
@@ -242,11 +216,9 @@ export type LoggedRequest = (
 	| ILoggedChatMLFailureRequest
 	| ILoggedChatMLCancelationRequest
 	| IMarkdownContentRequest
-	| ILoggedCompletionSuccessRequest
-	| ILoggedCompletionFailureRequest
 );
 
-const requestLogStorage = new AsyncLocalStorage<ChatRequest>();
+const requestLogStorage = new AsyncLocalStorage<CapturingToken>();
 
 export abstract class AbstractRequestLogger extends Disposable implements IRequestLogger {
 	declare _serviceBrand: undefined;
@@ -255,7 +227,7 @@ export abstract class AbstractRequestLogger extends Disposable implements IReque
 		return false;
 	}
 
-	public captureInvocation<T>(request: ChatRequest, fn: () => Promise<T>): Promise<T> {
+	public captureInvocation<T>(request: CapturingToken, fn: () => Promise<T>): Promise<T> {
 		return requestLogStorage.run(request, () => fn());
 	}
 
@@ -264,10 +236,6 @@ export abstract class AbstractRequestLogger extends Disposable implements IReque
 
 	public logChatRequest(debugName: string, chatEndpoint: IChatEndpoint, chatParams: ILoggedPendingRequest): PendingLoggedChatRequest {
 		return new PendingLoggedChatRequest(this, debugName, chatEndpoint, chatParams);
-	}
-
-	public logCompletionRequest(debugName: string, chatEndpoint: IChatEndpointLogInfo, chatParams: ICompletionFetchRequestLogParams, requestId: string): PendingLoggedCompletionRequest {
-		return new PendingLoggedCompletionRequest(this, debugName, chatEndpoint, chatParams, requestId);
 	}
 
 	public abstract addPromptTrace(elementName: string, endpoint: IChatEndpointInfo, result: RenderPromptResult, trace: HTMLTracer): void;
@@ -297,7 +265,7 @@ class AbstractPendingLoggedRequest {
 		protected _logbook: IRequestLogger,
 		protected _debugName: string,
 		protected _chatEndpoint: IChatEndpointLogInfo,
-		protected _chatParams: ILoggedPendingRequest | ICompletionFetchRequestLogParams
+		protected _chatParams: ILoggedPendingRequest
 	) {
 		this._time = new Date();
 	}
@@ -313,50 +281,9 @@ class AbstractPendingLoggedRequest {
 			chatEndpoint: this._chatEndpoint,
 			chatParams: this._chatParams,
 			startTime: this._time,
-			endTime: new Date()
+			endTime: new Date(),
+			isConversationRequest: this._chatParams.isConversationRequest
 		});
-	}
-}
-
-export class PendingLoggedCompletionRequest extends AbstractPendingLoggedRequest {
-
-	constructor(
-		logbook: IRequestLogger,
-		debugName: string,
-		chatEndpoint: IChatEndpointLogInfo,
-		chatParams: ICompletionFetchRequestLogParams,
-		private requestId: string
-	) {
-		super(logbook, debugName, chatEndpoint, chatParams);
-	}
-
-	resolve(result: Result<Completion, CompletionsFetchFailure | Error>): void {
-		if (result.isOk()) {
-			const completionText = result.val.choices.at(0)?.text;
-			assertType(completionText !== undefined, 'Completion with empty choices');
-
-			this._logbook.addEntry({
-				type: LoggedRequestKind.CompletionSuccess,
-				debugName: this._debugName,
-				chatEndpoint: this._chatEndpoint,
-				chatParams: this._chatParams,
-				startTime: this._time,
-				endTime: new Date(),
-				timeToFirstToken: this._timeToFirstToken,
-				result: { type: ChatFetchResponseType.Success, value: completionText, requestId: this.requestId },
-			});
-		} else {
-			this._logbook.addEntry({
-				type: LoggedRequestKind.CompletionFailure,
-				debugName: this._debugName,
-				chatEndpoint: this._chatEndpoint,
-				chatParams: this._chatParams,
-				startTime: this._time,
-				endTime: new Date(),
-				timeToFirstToken: this._timeToFirstToken,
-				result: { type: result.err, requestId: this.requestId },
-			});
-		}
 	}
 }
 
@@ -381,6 +308,7 @@ export class PendingLoggedChatRequest extends AbstractPendingLoggedRequest {
 				startTime: this._time,
 				endTime: new Date(),
 				timeToFirstToken: this._timeToFirstToken,
+				isConversationRequest: this._chatParams.isConversationRequest,
 				result,
 				deltas
 			});
@@ -393,6 +321,7 @@ export class PendingLoggedChatRequest extends AbstractPendingLoggedRequest {
 				startTime: this._time,
 				endTime: new Date(),
 				timeToFirstToken: this._timeToFirstToken,
+				isConversationRequest: this._chatParams.isConversationRequest,
 				result,
 			});
 		}

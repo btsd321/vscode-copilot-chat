@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import * as l10n from '@vscode/l10n';
 import type { TextEditor, Uri } from 'vscode';
 import { IAuthenticationService } from '../../../platform/authentication/common/authentication';
 import { IRunCommandExecutionService } from '../../../platform/commands/common/runCommandExecutionService';
@@ -26,7 +27,6 @@ import { isCancellationError } from '../../../util/vs/base/common/errors';
 import * as path from '../../../util/vs/base/common/path';
 import { URI } from '../../../util/vs/base/common/uri';
 import { IInstantiationService } from '../../../util/vs/platform/instantiation/common/instantiation';
-import { l10n } from '../../../vscodeTypes';
 import { FeedbackGenerator, FeedbackResult } from '../../prompt/node/feedbackGenerator';
 import { CurrentChange, CurrentChangeInput } from '../../prompts/node/feedback/currentChange';
 import { githubReview } from './githubReviewAgent';
@@ -181,6 +181,7 @@ async function doReview(
 			const canUseGitHubAgent = copilotToken.isCopilotCodeReviewEnabled;
 			result = canUseGitHubAgent ? await githubReview(logService, gitExtensionService, authService, capiClientService, domainService, fetcherService, envService, ignoreService, workspaceService, customInstructionsService, group, editor, progress, tokenSource.token) : await review(instantiationService, gitExtensionService, workspaceService, typeof group === 'object' && 'group' in group ? group.group : group, editor, progress, tokenSource.token);
 		} catch (err) {
+			logService.error(err, 'Error during code review');
 			result = { type: 'error', reason: err.message, severity: err.severity };
 		} finally {
 			if (tokenSource === inProgress) {

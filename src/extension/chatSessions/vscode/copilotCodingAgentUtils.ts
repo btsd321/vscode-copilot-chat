@@ -6,14 +6,13 @@
 import * as vscode from 'vscode';
 import { getGithubRepoIdFromFetchUrl, GithubRepoId, IGitService } from '../../../platform/git/common/gitService';
 import { ILogService } from '../../../platform/log/common/logService';
+import { UriHandlerPaths, UriHandlers } from './chatSessionsUriHandler';
 
 export const MAX_PROBLEM_STATEMENT_LENGTH = 30_000 - 50; // 50 character buffer
 export const CONTINUE_TRUNCATION = vscode.l10n.t('Continue with truncation');
-export const body_suffix = vscode.l10n.t('Created from VS Code via the [GitHub Pull Request](https://marketplace.visualstudio.com/items?itemName=GitHub.vscode-pull-request-github) extension.');
+export const body_suffix = vscode.l10n.t('Created from [VS Code](https://code.visualstudio.com/docs/copilot/copilot-coding-agent).');
+// https://github.com/github/sweagentd/blob/main/docs/adr/0001-create-job-api.md
 export const JOBS_API_VERSION = 'v1';
-type RemoteAgentSuccessResult = { link: string; state: 'success'; number: number; webviewUri: vscode.Uri; llmDetails: string; sessionId: string };
-type RemoteAgentErrorResult = { error: string; innerError?: string; state: 'error' };
-export type RemoteAgentResult = RemoteAgentSuccessResult | RemoteAgentErrorResult;
 
 /**
  * Truncation utility to ensure the problem statement sent to Copilot API is under the maximum length.
@@ -68,7 +67,7 @@ export function extractTitle(prompt: string, context: string | undefined): strin
 }
 
 export function formatBodyPlaceholder(title: string | undefined): string {
-	return vscode.l10n.t('Coding agent has begun work on **{0}** and will update this pull request as work progresses.', title || vscode.l10n.t('your request'));
+	return vscode.l10n.t('Cloud agent has begun work on **{0}** and will update this pull request as work progresses.', title || vscode.l10n.t('your request'));
 }
 
 export async function getRepoId(gitService: IGitService): Promise<GithubRepoId | undefined> {
@@ -85,4 +84,48 @@ export async function getRepoId(gitService: IGitService): Promise<GithubRepoId |
 	if (repo && repo.remoteFetchUrls?.[0]) {
 		return getGithubRepoIdFromFetchUrl(repo.remoteFetchUrls[0]);
 	}
+}
+
+export namespace SessionIdForPr {
+
+	const prefix = 'pull-session-by-index';
+
+	export function getId(prNumber: number, sessionIndex: number): string {
+		return `${prefix}-${prNumber}-${sessionIndex}`;
+	}
+
+	export function parse(resource: vscode.Uri): { prNumber: number; sessionIndex: number } | undefined {
+		const match = resource.path.match(new RegExp(`^/${prefix}-(\\d+)-(\\d+)$`));
+		if (match) {
+			return {
+				prNumber: parseInt(match[1], 10),
+				sessionIndex: parseInt(match[2], 10)
+			};
+		}
+		return undefined;
+	}
+
+	export function parsePullRequestNumber(resource: vscode.Uri): number {
+		return parseInt(resource.path.slice(1));
+	}
+}
+
+export async function toOpenPullRequestWebviewUri(params: {
+	owner: string;
+	repo: string;
+	pullRequestNumber: number;
+}): Promise<vscode.Uri> {
+	const query = JSON.stringify(params);
+	const extensionId = UriHandlers[UriHandlerPaths.External_OpenPullRequestWebview];
+	return await vscode.env.asExternalUri(vscode.Uri.from({ scheme: vscode.env.uriScheme, authority: extensionId, path: UriHandlerPaths.External_OpenPullRequestWebview, query }));
+}
+
+export function getAuthorDisplayName(author: { login: string } | null): string {
+	if (!author) {
+		return 'Unknown';
+	}
+	if (author.login.startsWith('copilot')) {
+		return 'Copilot';
+	}
+	return author.login;
 }

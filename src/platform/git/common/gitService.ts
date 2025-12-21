@@ -9,7 +9,7 @@ import { Event } from '../../../util/vs/base/common/event';
 import { IObservable } from '../../../util/vs/base/common/observableInternal';
 import { equalsIgnoreCase } from '../../../util/vs/base/common/strings';
 import { URI } from '../../../util/vs/base/common/uri';
-import { Change, Commit, LogOptions } from '../vscode/git';
+import { Change, Commit, CommitShortStat, LogOptions } from '../vscode/git';
 
 export interface RepoContext {
 	readonly rootUri: URI;
@@ -49,14 +49,21 @@ export interface IGitService extends IDisposable {
 	readonly repositories: Array<RepoContext>;
 	readonly isInitialized: boolean;
 
-	getRepository(uri: URI): Promise<RepoContext | undefined>;
+	getRepository(uri: URI, forceOpen?: boolean): Promise<RepoContext | undefined>;
 	getRepositoryFetchUrls(uri: URI): Promise<Pick<RepoContext, 'rootUri' | 'remoteFetchUrls'> | undefined>;
 	initialize(): Promise<void>;
+	add(uri: URI, paths: string[]): Promise<void>;
 	log(uri: URI, options?: LogOptions): Promise<Commit[] | undefined>;
 	diffBetween(uri: URI, ref1: string, ref2: string): Promise<Change[] | undefined>;
 	diffWith(uri: URI, ref: string): Promise<Change[] | undefined>;
+	diffIndexWithHEADShortStats(uri: URI): Promise<CommitShortStat | undefined>;
 	fetch(uri: URI, remote?: string, ref?: string, depth?: number): Promise<void>;
 	getMergeBase(uri: URI, ref1: string, ref2: string): Promise<string | undefined>;
+
+	createWorktree(uri: URI, options?: { path?: string; commitish?: string; branch?: string }): Promise<string | undefined>;
+	deleteWorktree(uri: URI, path: string, options?: { force?: boolean }): Promise<void>;
+
+	migrateChanges(uri: URI, sourceRepositoryUri: URI, options?: { confirmation?: boolean; deleteFromSource?: boolean; untracked?: boolean }): Promise<void>;
 }
 
 /**
@@ -76,8 +83,10 @@ export function getGitHubRepoInfoFromContext(repoContext: RepoContext): { id: Gi
 
 export interface ResolvedRepoRemoteInfo {
 	readonly fetchUrl: string | undefined;
-	readonly repoId: GithubRepoId | AdoRepoId;
+	readonly repoId: ResolvedRepoId;
 }
+
+export type ResolvedRepoId = GithubRepoId | AdoRepoId;
 
 /**
  * Gets the repo info for any type of repo from the repo context.

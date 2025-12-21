@@ -3,12 +3,13 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { assert, expect, suite, test } from 'vitest';
+import { assert, describe, expect, it, suite, test } from 'vitest';
 import { DocumentId } from '../../../../platform/inlineEdits/common/dataTypes/documentId';
 import { CurrentFileOptions, DEFAULT_OPTIONS } from '../../../../platform/inlineEdits/common/dataTypes/xtabPromptOptions';
+import { Result } from '../../../../util/common/result';
 import { OffsetRange } from '../../../../util/vs/editor/common/core/ranges/offsetRange';
 import { StringText } from '../../../../util/vs/editor/common/core/text/abstractText';
-import { buildCodeSnippetsUsingPagedClipping, createTaggedCurrentFileContentUsingPagedClipping } from '../../common/promptCrafting';
+import { buildCodeSnippetsUsingPagedClipping, createTaggedCurrentFileContentUsingPagedClipping, expandRangeToPageRange } from '../../common/promptCrafting';
 
 function nLines(n: number): StringText {
 	return new StringText(new Array(n).fill(0).map((_, i) => `${i + 1}`).join('\n'));
@@ -92,10 +93,80 @@ suite('Paged clipping - recently viewed files', () => {
 	});
 });
 
+describe('expandRangeToPageRange', () => {
+
+	const PAGE_SIZE = 10;
+	const UNLIM_BUDGET = 10000;
+	const computeTokens = (s: string) => 0; // pay 0 tokens per line (1 token for newline)
+
+	it('expands correctly when budget is only for two touched pages', () => {
+
+		const nDocLines = 47;
+		const docLines = nLines(nDocLines).getLines();
+		const r = expandRangeToPageRange(
+			docLines,
+			new OffsetRange(11, 22),
+			PAGE_SIZE,
+			2 * PAGE_SIZE, // budget for 2 pages
+			computeTokens, // pay 1 token per line (1 token for newline)
+			false
+		);
+
+		expect(r).toMatchInlineSnapshot(`
+			{
+			  "budgetLeft": 0,
+			  "firstPageIdx": 1,
+			  "lastPageIdxIncl": 2,
+			}
+		`);
+	});
+
+	it('expands correctly to the whole document', () => {
+
+		const nDocLines = 47;
+		const docLines = nLines(nDocLines).getLines();
+		const r = expandRangeToPageRange(
+			docLines,
+			new OffsetRange(11, 22),
+			PAGE_SIZE,
+			UNLIM_BUDGET,
+			computeTokens,
+			false
+		);
+
+		expect(r).toMatchInlineSnapshot(`
+			{
+			  "budgetLeft": 4973,
+			  "firstPageIdx": 0,
+			  "lastPageIdxIncl": 4,
+			}
+		`);
+	});
+});
+
 
 suite('Paged clipping - current file', () => {
 
 	const opts: CurrentFileOptions = DEFAULT_OPTIONS.currentFile;
+
+	function createTaggedFile(
+		currentDocLines: string[],
+		areaAroundCodeToEdit: string,
+		areaAroundEditWindowLinesRange: OffsetRange,
+		computeTokens: (s: string) => number,
+		pageSize: number,
+		opts: CurrentFileOptions,
+	): Result<string, 'outOfBudget'> {
+
+		return createTaggedCurrentFileContentUsingPagedClipping(
+			currentDocLines,
+			areaAroundCodeToEdit,
+			areaAroundEditWindowLinesRange,
+			computeTokens,
+			pageSize,
+			opts
+		).map(taggedCurrentFileContent => taggedCurrentFileContent.lines.join('\n'));
+	}
 
 	test('unlim budget - includes whole context', () => {
 
@@ -113,7 +184,7 @@ suite('Paged clipping - current file', () => {
 </area_around_code_to_edit>
 `.trim();
 
-		const result = createTaggedCurrentFileContentUsingPagedClipping(
+		const result = createTaggedFile(
 			docLines.getLines(),
 			areaAroundCodeToEdit,
 			new OffsetRange(21, 26),
@@ -122,7 +193,7 @@ suite('Paged clipping - current file', () => {
 			{ ...opts, maxTokens: 2000 }
 		);
 		assert(result.isOk());
-		const { taggedCurrentFileContent } = result.val;
+		const taggedCurrentFileContent = result.val;
 
 		expect(taggedCurrentFileContent).toMatchInlineSnapshot(`
 			"1
@@ -189,7 +260,7 @@ suite('Paged clipping - current file', () => {
 </area_around_code_to_edit>
 `.trim();
 
-		const result = createTaggedCurrentFileContentUsingPagedClipping(
+		const result = createTaggedFile(
 			docLines.getLines(),
 			areaAroundCodeToEdit,
 			new OffsetRange(21, 26),
@@ -197,11 +268,10 @@ suite('Paged clipping - current file', () => {
 			10,
 			{ ...opts, maxTokens: 20 },
 		);
-		expect(result).toMatchInlineSnapshot(`
-			ResultOk {
-			  "val": {
-			    "nLines": 6,
-			    "taggedCurrentFileContent": "21
+		assert(result.isOk());
+		const taggedCurrentFileContent = result.val;
+		expect(taggedCurrentFileContent).toMatchInlineSnapshot(`
+			"21
 			<area_around_code_to_edit>
 			22
 			23
@@ -214,9 +284,7 @@ suite('Paged clipping - current file', () => {
 			27
 			28
 			29
-			30",
-			  },
-			}
+			30"
 		`);
 	});
 
@@ -236,7 +304,7 @@ suite('Paged clipping - current file', () => {
 </a>
 `.trim();
 
-		const result = createTaggedCurrentFileContentUsingPagedClipping(
+		const result = createTaggedFile(
 			docLines.getLines(),
 			areaAroundCodeToEdit,
 			new OffsetRange(10, 14),
@@ -245,7 +313,7 @@ suite('Paged clipping - current file', () => {
 			{ ...opts, maxTokens: 50 }
 		);
 		assert(result.isOk());
-		const { taggedCurrentFileContent } = result.val;
+		const taggedCurrentFileContent = result.val;
 
 		expect(taggedCurrentFileContent).toMatchInlineSnapshot(`
 			"<a>

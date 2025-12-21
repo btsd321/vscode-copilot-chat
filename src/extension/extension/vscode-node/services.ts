@@ -3,11 +3,11 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { ExtensionContext, ExtensionMode } from 'vscode';
+import { ExtensionContext, ExtensionMode, env } from 'vscode';
 import { IAuthenticationService } from '../../../platform/authentication/common/authentication';
 import { ICopilotTokenManager } from '../../../platform/authentication/common/copilotTokenManager';
 import { StaticGitHubAuthenticationService } from '../../../platform/authentication/common/staticGitHubAuthenticationService';
-import { getOrCreateTestingCopilotTokenManager, getStaticGitHubToken } from '../../../platform/authentication/node/copilotTokenManager';
+import { createStaticGitHubTokenProvider, getOrCreateTestingCopilotTokenManager } from '../../../platform/authentication/node/copilotTokenManager';
 import { AuthenticationService } from '../../../platform/authentication/vscode-node/authenticationService';
 import { VSCodeCopilotTokenManager } from '../../../platform/authentication/vscode-node/copilotTokenManager';
 import { IChatAgentService } from '../../../platform/chat/common/chatAgents';
@@ -21,17 +21,21 @@ import { DiffServiceImpl } from '../../../platform/diff/node/diffServiceImpl';
 import { ICAPIClientService } from '../../../platform/endpoint/common/capiClient';
 import { IDomainService } from '../../../platform/endpoint/common/domainService';
 import { IEndpointProvider } from '../../../platform/endpoint/common/endpointProvider';
+import { AutomodeService, IAutomodeService } from '../../../platform/endpoint/node/automodeService';
 import { CAPIClientImpl } from '../../../platform/endpoint/node/capiClientImpl';
 import { DomainService } from '../../../platform/endpoint/node/domainServiceImpl';
 import { INativeEnvService, isScenarioAutomation } from '../../../platform/env/common/envService';
+import { NativeEnvServiceImpl } from '../../../platform/env/vscode-node/nativeEnvServiceImpl';
 import { IGitCommitMessageService } from '../../../platform/git/common/gitCommitMessageService';
 import { IGitDiffService } from '../../../platform/git/common/gitDiffService';
 import { IGithubRepositoryService } from '../../../platform/github/common/githubService';
 import { GithubRepositoryService } from '../../../platform/github/node/githubRepositoryService';
-import { IIgnoreService } from '../../../platform/ignore/common/ignoreService';
+import { IIgnoreService, NullIgnoreService } from '../../../platform/ignore/common/ignoreService';
 import { VsCodeIgnoreService } from '../../../platform/ignore/vscode-node/ignoreService';
 import { IImageService } from '../../../platform/image/common/imageService';
 import { ImageServiceImpl } from '../../../platform/image/node/imageServiceImpl';
+import { IInlineEditsModelService, IUndesiredModelsManager } from '../../../platform/inlineEdits/common/inlineEditsModelService';
+import { InlineEditsModelService, UndesiredModels } from '../../../platform/inlineEdits/node/inlineEditsModelService';
 import { ILanguageContextProviderService } from '../../../platform/languageContextProvider/common/languageContextProviderService';
 import { ILanguageContextService } from '../../../platform/languageServer/common/languageContextService';
 import { ICompletionsFetchService } from '../../../platform/nesFetch/common/completionsFetchService';
@@ -40,6 +44,8 @@ import { IFetcherService } from '../../../platform/networking/common/fetcherServ
 import { FetcherService } from '../../../platform/networking/vscode-node/fetcherServiceImpl';
 import { IParserService } from '../../../platform/parser/node/parserService';
 import { ParserServiceImpl } from '../../../platform/parser/node/parserServiceImpl';
+import { IProxyModelsService } from '../../../platform/proxyModels/common/proxyModelsService';
+import { ProxyModelsService } from '../../../platform/proxyModels/node/proxyModelsService';
 import { AdoCodeSearchService, IAdoCodeSearchService } from '../../../platform/remoteCodeSearch/common/adoCodeSearchService';
 import { GithubCodeSearchService, IGithubCodeSearchService } from '../../../platform/remoteCodeSearch/common/githubCodeSearchService';
 import { ICodeSearchAuthenticationService } from '../../../platform/remoteCodeSearch/node/codeSearchRepoAuth';
@@ -62,11 +68,15 @@ import { IWorkspaceMutationManager } from '../../../platform/testing/common/work
 import { ISetupTestsDetector, SetupTestsDetector } from '../../../platform/testing/node/setupTestDetector';
 import { ITestDepsResolver, TestDepsResolver } from '../../../platform/testing/node/testDepsResolver';
 import { ITokenizerProvider, TokenizerProvider } from '../../../platform/tokenizer/node/tokenizer';
+import { GithubAvailableEmbeddingTypesService, IGithubAvailableEmbeddingTypesService } from '../../../platform/workspaceChunkSearch/common/githubAvailableEmbeddingTypes';
+import { IRerankerService, RerankerService } from '../../../platform/workspaceChunkSearch/common/rerankerService';
 import { IWorkspaceChunkSearchService, WorkspaceChunkSearchService } from '../../../platform/workspaceChunkSearch/node/workspaceChunkSearchService';
 import { IWorkspaceFileIndex, WorkspaceFileIndex } from '../../../platform/workspaceChunkSearch/node/workspaceFileIndex';
 import { IInstantiationServiceBuilder } from '../../../util/common/services';
 import { SyncDescriptor } from '../../../util/vs/platform/instantiation/common/descriptors';
 import { CommandServiceImpl, ICommandService } from '../../commands/node/commandService';
+import { ICopilotInlineCompletionItemProviderService } from '../../completions/common/copilotInlineCompletionItemProviderService';
+import { CopilotInlineCompletionItemProviderService } from '../../completions/vscode-node/copilotInlineCompletionItemProviderService';
 import { ApiEmbeddingsIndex, IApiEmbeddingsIndex } from '../../context/node/resolvers/extensionApi';
 import { IPromptWorkspaceLabels, PromptWorkspaceLabels } from '../../context/node/resolvers/promptWorkspaceLabels';
 import { ChatAgentService } from '../../conversation/vscode-node/chatParticipants';
@@ -92,6 +102,7 @@ import { GitCommitMessageServiceImpl } from '../../prompt/vscode-node/gitCommitM
 import { GitDiffService } from '../../prompt/vscode-node/gitDiffService';
 import { PromptVariablesServiceImpl } from '../../prompt/vscode-node/promptVariablesService';
 import { RequestLogger } from '../../prompt/vscode-node/requestLoggerImpl';
+import { ScenarioAutomationEndpointProviderImpl } from '../../prompt/vscode-node/scenarioAutomationEndpointProviderImpl';
 import { SettingsEditorSearchServiceImpl } from '../../prompt/vscode-node/settingsEditorSearchServiceImpl';
 import { CodeMapperService, ICodeMapperService } from '../../prompts/node/codeMapper/codeMapperService';
 import { FixCookbookService, IFixCookbookService } from '../../prompts/node/inline/fixCookbookService';
@@ -102,8 +113,6 @@ import { LanguageContextServiceImpl } from '../../typescriptContext/vscode-node/
 import { IWorkspaceListenerService } from '../../workspaceRecorder/common/workspaceListenerService';
 import { WorkspacListenerService } from '../../workspaceRecorder/vscode-node/workspaceListenerService';
 import { registerServices as registerCommonServices } from '../vscode/services';
-import { NativeEnvServiceImpl } from '../../../platform/env/vscode-node/nativeEnvServiceImpl';
-import { GithubAvailableEmbeddingTypesService, IGithubAvailableEmbeddingTypesService } from '../../../platform/workspaceChunkSearch/common/githubAvailableEmbeddingTypes';
 
 // ###########################################################################################
 // ###                                                                                     ###
@@ -118,6 +127,7 @@ export function registerServices(builder: IInstantiationServiceBuilder, extensio
 
 	registerCommonServices(builder, extensionContext);
 
+	builder.define(IAutomodeService, new SyncDescriptor(AutomodeService));
 	builder.define(IConversationStore, new ConversationStore());
 	builder.define(IDiffService, new DiffServiceImpl());
 	builder.define(ITokenizerProvider, new SyncDescriptor(TokenizerProvider, [true]));
@@ -141,23 +151,25 @@ export function registerServices(builder: IInstantiationServiceBuilder, extensio
 		// here and then re-use it later. This is particularly the case for those objects
 		// which implement VSCode interfaces so can't be changed to take `accessor` in their
 		// method parameters.
-		builder.define(ICopilotTokenManager, getOrCreateTestingCopilotTokenManager());
+		builder.define(ICopilotTokenManager, getOrCreateTestingCopilotTokenManager(env.devDeviceId));
 	} else {
 		setupTelemetry(builder, extensionContext, internalAIKey, internalLargeEventAIKey, ariaKey);
 		builder.define(ICopilotTokenManager, new SyncDescriptor(VSCodeCopilotTokenManager));
 	}
 
 	if (isScenarioAutomation) {
-		builder.define(IAuthenticationService, new SyncDescriptor(StaticGitHubAuthenticationService, [getStaticGitHubToken]));
+		builder.define(IAuthenticationService, new SyncDescriptor(StaticGitHubAuthenticationService, [createStaticGitHubTokenProvider()]));
+		builder.define(IEndpointProvider, new SyncDescriptor(ScenarioAutomationEndpointProviderImpl, [collectFetcherTelemetry]));
+		builder.define(IIgnoreService, new SyncDescriptor(NullIgnoreService));
 	} else {
 		builder.define(IAuthenticationService, new SyncDescriptor(AuthenticationService));
+		builder.define(IEndpointProvider, new SyncDescriptor(ProductionEndpointProvider, [collectFetcherTelemetry]));
+		builder.define(IIgnoreService, new SyncDescriptor(VsCodeIgnoreService));
 	}
 
 	builder.define(ITestGenInfoStorage, new SyncDescriptor(TestGenInfoStorage)); // Used for test generation (/tests intent)
-	builder.define(IEndpointProvider, new SyncDescriptor(ProductionEndpointProvider, [collectFetcherTelemetry]));
 	builder.define(IParserService, new SyncDescriptor(ParserServiceImpl, [/*useWorker*/ true]));
 	builder.define(IIntentService, new SyncDescriptor(IntentService));
-	builder.define(IIgnoreService, new SyncDescriptor(VsCodeIgnoreService));
 	builder.define(INaiveChunkingService, new SyncDescriptor(NaiveChunkingService));
 	builder.define(IWorkspaceFileIndex, new SyncDescriptor(WorkspaceFileIndex));
 	builder.define(IChunkingEndpointClient, new SyncDescriptor(ChunkingEndpointClientImpl));
@@ -197,6 +209,11 @@ export function registerServices(builder: IInstantiationServiceBuilder, extensio
 	builder.define(ICodeSearchAuthenticationService, new SyncDescriptor(VsCodeCodeSearchAuthenticationService));
 	builder.define(ITodoListContextProvider, new SyncDescriptor(TodoListContextProvider));
 	builder.define(IGithubAvailableEmbeddingTypesService, new SyncDescriptor(GithubAvailableEmbeddingTypesService));
+	builder.define(IRerankerService, new SyncDescriptor(RerankerService));
+	builder.define(IProxyModelsService, new SyncDescriptor(ProxyModelsService));
+	builder.define(IInlineEditsModelService, new SyncDescriptor(InlineEditsModelService));
+	builder.define(IUndesiredModelsManager, new SyncDescriptor(UndesiredModels.Manager));
+	builder.define(ICopilotInlineCompletionItemProviderService, new SyncDescriptor(CopilotInlineCompletionItemProviderService));
 }
 
 function setupMSFTExperimentationService(builder: IInstantiationServiceBuilder, extensionContext: ExtensionContext) {

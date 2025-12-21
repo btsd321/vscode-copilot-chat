@@ -28,48 +28,11 @@ import { ITelemetryService, TelemetryProperties } from '../../telemetry/common/t
 import { TelemetryData } from '../../telemetry/common/telemetryData';
 import { ITokenizerProvider } from '../../tokenizer/node/tokenizer';
 import { ICAPIClientService } from '../common/capiClient';
+import { isAnthropicFamily } from '../common/chatModelCapabilities';
 import { IDomainService } from '../common/domainService';
 import { CustomModel, IChatModelInformation, ModelPolicy, ModelSupportedEndpoint } from '../common/endpointProvider';
+import { createMessagesRequestBody, processResponseFromMessagesEndpoint } from './messagesApi';
 import { createResponsesRequestBody, processResponseFromChatEndpoint } from './responsesApi';
-
-// get ChatMaxNumTokens from config for experimentation
-export function getMaxPromptTokens(configService: IConfigurationService, expService: IExperimentationService, chatModelInfo: IChatModelInformation): number {
-	// check debug override ChatMaxTokenNum
-	const chatMaxTokenNumOverride = configService.getConfig(ConfigKey.Internal.DebugOverrideChatMaxTokenNum); // can only be set by internal users
-	// Base 3 tokens for each OpenAI completion
-	let modelLimit = -3;
-	// if option is set, takes precedence over any other logic
-	if (chatMaxTokenNumOverride > 0) {
-		modelLimit += chatMaxTokenNumOverride;
-		return modelLimit;
-	}
-
-	let experimentalOverrides: Record<string, number> = {};
-	try {
-		const expValue = expService.getTreatmentVariable<string>('copilotchat.contextWindows');
-		experimentalOverrides = JSON.parse(expValue ?? '{}');
-	} catch {
-		// If the experiment service either is not available or returns a bad value we ignore the overrides
-	}
-
-	// If there's an experiment that takes precedence over what comes back from CAPI
-	if (experimentalOverrides[chatModelInfo.id]) {
-		modelLimit += experimentalOverrides[chatModelInfo.id];
-		return modelLimit;
-	}
-
-	// Check if CAPI has promot token limits and return those
-	if (chatModelInfo.capabilities?.limits?.max_prompt_tokens) {
-		modelLimit += chatModelInfo.capabilities.limits.max_prompt_tokens;
-		return modelLimit;
-	} else if (chatModelInfo.capabilities.limits?.max_context_window_tokens) {
-		// Otherwise return the context window as the prompt tokens for cases where CAPI doesn't configure the prompt tokens
-		modelLimit += chatModelInfo.capabilities.limits.max_context_window_tokens;
-		return modelLimit;
-	}
-
-	return modelLimit;
-}
 
 /**
  * The default processor for the stream format from CAPI
@@ -103,7 +66,14 @@ export async function defaultNonStreamChatResponseProcessor(response: Response, 
 	const completions: ChatCompletion[] = [];
 	for (let i = 0; i < (jsonResponse?.choices?.length || 0); i++) {
 		const choice = jsonResponse.choices[i];
-		const message: Raw.AssistantChatMessage = choice.message;
+		const message: Raw.AssistantChatMessage = {
+			role: choice.message.role,
+			content: choice.message.content,
+			name: choice.message.name,
+			// Normalize property name: OpenAI API uses snake_case (tool_calls) but our types expect camelCase (toolCalls)
+			// See: https://platform.openai.com/docs/api-reference/chat/object#chat-object-choices-message-tool_calls
+			toolCalls: choice.message.toolCalls ?? choice.message.tool_calls,
+		};
 		const messageText = getTextPart(message.content);
 		const requestId = response.headers.get('X-Request-ID') ?? generateUuid();
 		const ghRequestId = response.headers.get('x-github-request-id') ?? '';
@@ -112,6 +82,7 @@ export async function defaultNonStreamChatResponseProcessor(response: Response, 
 		const completion: ChatCompletion = {
 			blockFinished: false,
 			choiceIndex: i,
+			model: jsonResponse.model,
 			filterReason: undefined,
 			finishReason: choice.finish_reason as FinishedCompletionReason,
 			message: message,
@@ -161,7 +132,7 @@ export class ChatEndpoint implements IChatEndpoint {
 	private _policyDetails: ModelPolicy | undefined;
 
 	constructor(
-		private readonly _modelMetadata: IChatModelInformation,
+		public readonly modelMetadata: IChatModelInformation,
 		@IDomainService protected readonly _domainService: IDomainService,
 		@ICAPIClientService private readonly _capiClientService: ICAPIClientService,
 		@IFetcherService private readonly _fetcherService: IFetcherService,
@@ -175,26 +146,30 @@ export class ChatEndpoint implements IChatEndpoint {
 		@ILogService _logService: ILogService,
 	) {
 		// This metadata should always be present, but if not we will default to 8192 tokens
-		this._maxTokens = _modelMetadata.capabilities.limits?.max_prompt_tokens ?? 8192;
+		this._maxTokens = modelMetadata.capabilities.limits?.max_prompt_tokens ?? 8192;
 		// This metadata should always be present, but if not we will default to 4096 tokens
-		this._maxOutputTokens = _modelMetadata.capabilities.limits?.max_output_tokens ?? 4096;
-		this.model = _modelMetadata.id;
-		this.name = _modelMetadata.name;
-		this.version = _modelMetadata.version;
-		this.family = _modelMetadata.capabilities.family;
-		this.tokenizer = _modelMetadata.capabilities.tokenizer;
-		this.showInModelPicker = _modelMetadata.model_picker_enabled;
-		this.isPremium = _modelMetadata.billing?.is_premium;
-		this.multiplier = _modelMetadata.billing?.multiplier;
-		this.restrictedToSkus = _modelMetadata.billing?.restricted_to;
-		this.isDefault = _modelMetadata.is_chat_default;
-		this.isFallback = _modelMetadata.is_chat_fallback;
-		this.supportsToolCalls = !!_modelMetadata.capabilities.supports.tool_calls;
-		this.supportsVision = !!_modelMetadata.capabilities.supports.vision;
-		this.supportsPrediction = !!_modelMetadata.capabilities.supports.prediction;
-		this._supportsStreaming = !!_modelMetadata.capabilities.supports.streaming;
-		this._policyDetails = _modelMetadata.policy;
-		this.customModel = _modelMetadata.custom_model;
+		this._maxOutputTokens = modelMetadata.capabilities.limits?.max_output_tokens ?? 4096;
+		this.model = modelMetadata.id;
+		this.name = modelMetadata.name;
+		this.version = modelMetadata.version;
+		this.family = modelMetadata.capabilities.family;
+		this.tokenizer = modelMetadata.capabilities.tokenizer;
+		this.showInModelPicker = modelMetadata.model_picker_enabled;
+		this.isPremium = modelMetadata.billing?.is_premium;
+		this.multiplier = modelMetadata.billing?.multiplier;
+		this.restrictedToSkus = modelMetadata.billing?.restricted_to;
+		this.isDefault = modelMetadata.is_chat_default;
+		this.isFallback = modelMetadata.is_chat_fallback;
+		this.supportsToolCalls = !!modelMetadata.capabilities.supports.tool_calls;
+		this.supportsVision = !!modelMetadata.capabilities.supports.vision;
+		this.supportsPrediction = !!modelMetadata.capabilities.supports.prediction;
+		this._supportsStreaming = !!modelMetadata.capabilities.supports.streaming;
+		this._policyDetails = modelMetadata.policy;
+		this.customModel = modelMetadata.custom_model;
+	}
+
+	public getExtraHeaders(): Record<string, string> {
+		return this.modelMetadata.requestHeaders ?? {};
 	}
 
 	public get modelMaxPromptTokens(): number {
@@ -208,24 +183,30 @@ export class ChatEndpoint implements IChatEndpoint {
 	public get urlOrRequestMetadata(): string | RequestMetadata {
 		// Use override or respect setting.
 		// TODO unlikely but would break if it changes in the middle of a request being constructed
-		return this._modelMetadata.urlOrRequestMetadata ??
-			(this.useResponsesApi ? { type: RequestType.ChatResponses } : { type: RequestType.ChatCompletions });
+		return this.modelMetadata.urlOrRequestMetadata ??
+			(this.useResponsesApi ? { type: RequestType.ChatResponses } :
+				this.useMessagesApi ? { type: RequestType.ChatMessages } : { type: RequestType.ChatCompletions });
 	}
 
 	protected get useResponsesApi(): boolean {
-		if (this._modelMetadata.supported_endpoints
-			&& !this._modelMetadata.supported_endpoints.includes(ModelSupportedEndpoint.ChatCompletions)
-			&& this._modelMetadata.supported_endpoints.includes(ModelSupportedEndpoint.Responses)
+		if (this.modelMetadata.supported_endpoints
+			&& !this.modelMetadata.supported_endpoints.includes(ModelSupportedEndpoint.ChatCompletions)
+			&& this.modelMetadata.supported_endpoints.includes(ModelSupportedEndpoint.Responses)
 		) {
 			return true;
 		}
 
 		const enableResponsesApi = this._configurationService.getExperimentBasedConfig(ConfigKey.UseResponsesApi, this._expService);
-		return !!(enableResponsesApi && this._modelMetadata.supported_endpoints?.includes(ModelSupportedEndpoint.Responses));
+		return !!(enableResponsesApi && this.modelMetadata.supported_endpoints?.includes(ModelSupportedEndpoint.Responses));
+	}
+
+	protected get useMessagesApi(): boolean {
+		const enableMessagesApi = this._configurationService.getExperimentBasedConfig(ConfigKey.TeamInternal.UseMessagesApi, this._expService);
+		return !!(enableMessagesApi && this.modelMetadata.supported_endpoints?.includes(ModelSupportedEndpoint.Messages));
 	}
 
 	public get degradationReason(): string | undefined {
-		return this._modelMetadata.warning_message;
+		return this.modelMetadata.warning_messages?.at(0)?.message ?? this.modelMetadata.info_messages?.at(0)?.message;
 	}
 
 	public get policy(): 'enabled' | { terms: string } {
@@ -239,11 +220,8 @@ export class ChatEndpoint implements IChatEndpoint {
 	}
 
 	public get apiType(): string {
-		return this.useResponsesApi ? 'responses' : 'chatCompletions';
-	}
-
-	public get supportsThinkingContentInHistory(): boolean {
-		return this.family === 'oswe';
+		return this.useResponsesApi ? 'responses' :
+			this.useMessagesApi ? 'messages' : 'chatCompletions';
 	}
 
 	interceptBody(body: IEndpointBody | undefined): void {
@@ -277,11 +255,14 @@ export class ChatEndpoint implements IChatEndpoint {
 
 	createRequestBody(options: ICreateEndpointBodyOptions): IEndpointBody {
 		if (this.useResponsesApi) {
-			const body = this._instantiationService.invokeFunction(createResponsesRequestBody, options, this.model, this._modelMetadata);
+			const body = this._instantiationService.invokeFunction(createResponsesRequestBody, options, this.model, this);
 			return this.customizeResponsesBody(body);
+		} else if (this.useMessagesApi) {
+			const body = this._instantiationService.invokeFunction(createMessagesRequestBody, options, this.model, this);
+			return this.customizeMessagesBody(body);
 		} else {
 			const body = createCapiRequestBody(options, this.model, this.getCompletionsCallback());
-			return this.customizeCapiBody(body);
+			return this.customizeCapiBody(body, options);
 		}
 	}
 
@@ -289,11 +270,24 @@ export class ChatEndpoint implements IChatEndpoint {
 		return undefined;
 	}
 
+	protected customizeMessagesBody(body: IEndpointBody): IEndpointBody {
+		return body;
+	}
+
 	protected customizeResponsesBody(body: IEndpointBody): IEndpointBody {
 		return body;
 	}
 
-	protected customizeCapiBody(body: IEndpointBody): IEndpointBody {
+	protected customizeCapiBody(body: IEndpointBody, options: ICreateEndpointBodyOptions): IEndpointBody {
+		const isConversationAgent = options.location === ChatLocation.Agent;
+		if (isAnthropicFamily(this) && !options.disableThinking && isConversationAgent) {
+			const configuredBudget = this._configurationService.getExperimentBasedConfig(ConfigKey.AnthropicThinkingBudget, this._expService);
+			if (configuredBudget && configuredBudget > 0) {
+				const normalizedBudget = configuredBudget < 1024 ? 1024 : configuredBudget;
+				// Cap thinking budget to Anthropic's recommended max (32000), and ensure it's less than max output tokens
+				body.thinking_budget = Math.min(32000, this._maxOutputTokens - 1, normalizedBudget);
+			}
+		}
 		return body;
 	}
 
@@ -308,6 +302,8 @@ export class ChatEndpoint implements IChatEndpoint {
 	): Promise<AsyncIterableObject<ChatCompletion>> {
 		if (this.useResponsesApi) {
 			return processResponseFromChatEndpoint(this._instantiationService, telemetryService, logService, response, expectedNumChoices, finishCallback, telemetryData);
+		} else if (this.useMessagesApi) {
+			return processResponseFromMessagesEndpoint(this._instantiationService, telemetryService, logService, response, expectedNumChoices, finishCallback, telemetryData);
 		} else if (!this._supportsStreaming) {
 			return defaultNonStreamChatResponseProcessor(response, finishCallback, telemetryData);
 		} else {
@@ -392,7 +388,7 @@ export class ChatEndpoint implements IChatEndpoint {
 	public cloneWithTokenOverride(modelMaxPromptTokens: number): IChatEndpoint {
 		return this._instantiationService.createInstance(
 			ChatEndpoint,
-			mixin(deepClone(this._modelMetadata), { capabilities: { limits: { max_prompt_tokens: modelMaxPromptTokens } } }));
+			mixin(deepClone(this.modelMetadata), { capabilities: { limits: { max_prompt_tokens: modelMaxPromptTokens } } }));
 	}
 }
 

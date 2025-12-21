@@ -33,6 +33,6 @@ coverage/
 test/simulation/cache/_base.sqlite
 
 test/aml/out
-src/extension/completions-core
 
+# Ignore files in huksy (else we always end up with files when creating worktre
 .vscode/

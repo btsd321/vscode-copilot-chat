@@ -25,7 +25,7 @@ import { DebugRecorder } from './debugRecorder';
 import { INesConfigs } from './nesConfigs';
 import { INextEditDisplayLocation, INextEditResult } from './nextEditResult';
 
-export type NextEditTelemetryStatus = 'new' | 'requested' | `noEdit:${string}` | 'docChanged' | 'emptyEdits' | 'previouslyRejected' | 'previouslyRejectedCache' | 'accepted' | 'notAccepted' | 'rejected';
+export type NextEditTelemetryStatus = 'new' | 'requested' | `noEdit:${string}` | 'docChanged' | 'emptyEdits' | 'emptyEditsButHasNextCursorPosition' | 'previouslyRejected' | 'previouslyRejectedCache' | 'accepted' | 'notAccepted' | 'rejected';
 
 export type NesAcceptance = 'accepted' | 'notAccepted' | 'rejected';
 
@@ -753,6 +753,7 @@ export class TelemetrySender implements IDisposable {
 				"providerId": { "classification": "SystemMetaData", "purpose": "FeatureInsight", "comment": "NES provider identifier (StatelessNextEditProvider)" },
 				"modelName": { "classification": "SystemMetaData", "purpose": "FeatureInsight", "comment": "Name of the model used to provide the NES" },
 				"activeDocumentLanguageId": { "classification": "SystemMetaData", "purpose": "FeatureInsight", "comment": "LanguageId of the active document" },
+				"mergeConflictExpanded": { "classification": "SystemMetaData", "purpose": "FeatureInsight", "comment": "If and how edit window expanded to include merge conflict lines ('normal' or 'only' or undefined if not expanded)" },
 				"acceptance": { "classification": "SystemMetaData", "purpose": "FeatureInsight", "comment": "User acceptance of the edit" },
 				"disposalReason": { "classification": "SystemMetaData", "purpose": "FeatureInsight", "comment": "Reason for disposal of NES" },
 				"supersededByOpportunityId": { "classification": "SystemMetaData", "purpose": "FeatureInsight", "comment": "UUID of the opportunity that superseded this edit" },
@@ -831,6 +832,7 @@ export class TelemetrySender implements IDisposable {
 				providerId,
 				modelName,
 				activeDocumentLanguageId,
+				mergeConflictExpanded: telemetry.mergeConflictExpanded,
 				acceptance,
 				disposalReason,
 				supersededByOpportunityId,
@@ -844,7 +846,7 @@ export class TelemetrySender implements IDisposable {
 				notebookType,
 				notebookId,
 				notebookCellLines,
-				nextCursorLineError: telemetry.nextCursorLineError,
+				nextCursorLineError: telemetry.nextCursorPrediction?.nextCursorLineError,
 			},
 			{
 				requestN,
@@ -899,7 +901,7 @@ export class TelemetrySender implements IDisposable {
 				diagnosticDistanceToUnknownDiagnostic: diagnosticDistanceToUnknownDiagnostic,
 				diagnosticDistanceToAlternativeDiagnostic: diagnosticDistanceToAlternativeDiagnostic,
 				diagnosticHasAlternativeDiagnosticForSameRange: this._boolToNum(diagnosticHasAlternativeDiagnosticForSameRange),
-				nextCursorLineDistance: telemetry.nextCursorLineDistance,
+				nextCursorLineDistance: telemetry.nextCursorPrediction?.nextCursorLineDistance,
 			}
 		);
 	}

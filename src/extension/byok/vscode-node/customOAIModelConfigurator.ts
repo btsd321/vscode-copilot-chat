@@ -20,6 +20,7 @@ interface ModelConfig {
 	requiresAPIKey?: boolean;
 	thinking?: boolean;
 	requestHeaders?: Record<string, string>;
+	zeroDataRetentionEnabled?: boolean;
 }
 
 interface ModelQuickPickItem extends QuickPickItem {
@@ -127,7 +128,7 @@ export class CustomOAIModelConfigurator {
 
 			// Add separator and actions
 			if (items.length > 0) {
-				items.push({ label: '', kind: -1 } as any);
+				items.push({ label: '', kind: -1 });
 			}
 
 			items.push({

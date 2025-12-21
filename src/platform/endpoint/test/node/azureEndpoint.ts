@@ -100,12 +100,12 @@ export class AzureTestEndpoint extends ChatEndpoint {
 		return 'Bearer ' + this.getSecretKey();
 	}
 
-	public getExtraHeaders(): Record<string, string> {
+	public override getExtraHeaders(): Record<string, string> {
 		return {
 			'Authorization': this.getAuthHeader(),
 			'ocp-apim-subscription-key': this.getSecretKey(),
 			'api-key': this.getSecretKey(),
-			'x-policy-id': "nil"
+			'x-policy-id': 'nil'
 		};
 	}
 

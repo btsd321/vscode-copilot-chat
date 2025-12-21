@@ -5,7 +5,7 @@
 
 import { ChatResponseReferencePartStatusKind } from '@vscode/prompt-tsx';
 import type { ChatResponseFileTree, ChatResponseStream, ChatVulnerability, Command, ExtendedChatResponsePart, Location, NotebookEdit, Progress, ThinkingDelta, Uri } from 'vscode';
-import { ChatPrepareToolInvocationPart, ChatResponseAnchorPart, ChatResponseClearToPreviousToolInvocationReason, ChatResponseCodeblockUriPart, ChatResponseCodeCitationPart, ChatResponseCommandButtonPart, ChatResponseConfirmationPart, ChatResponseFileTreePart, ChatResponseMarkdownPart, ChatResponseMarkdownWithVulnerabilitiesPart, ChatResponseNotebookEditPart, ChatResponseProgressPart, ChatResponseProgressPart2, ChatResponseReferencePart, ChatResponseReferencePart2, ChatResponseTextEditPart, ChatResponseThinkingProgressPart, ChatResponseWarningPart, MarkdownString, TextEdit } from '../../vscodeTypes';
+import { ChatPrepareToolInvocationPart, ChatResponseAnchorPart, ChatResponseClearToPreviousToolInvocationReason, ChatResponseCodeblockUriPart, ChatResponseCodeCitationPart, ChatResponseCommandButtonPart, ChatResponseConfirmationPart, ChatResponseExternalEditPart, ChatResponseFileTreePart, ChatResponseMarkdownPart, ChatResponseMarkdownWithVulnerabilitiesPart, ChatResponseNotebookEditPart, ChatResponseProgressPart, ChatResponseProgressPart2, ChatResponseReferencePart, ChatResponseReferencePart2, ChatResponseTextEditPart, ChatResponseThinkingProgressPart, ChatResponseWarningPart, MarkdownString, TextEdit } from '../../vscodeTypes';
 import type { ThemeIcon } from '../vs/base/common/themables';
 
 
@@ -97,6 +97,12 @@ export class ChatResponseStreamImpl implements FinalizableChatResponseStream {
 
 	filetree(value: ChatResponseFileTree[], baseUri: Uri): void {
 		this._push(new ChatResponseFileTreePart(value, baseUri));
+	}
+
+	async externalEdit(target: Uri | Uri[], callback: () => Thenable<unknown>): Promise<string> {
+		const part = new ChatResponseExternalEditPart(target instanceof Array ? target : [target], callback);
+		this._push(part);
+		return part.applied;
 	}
 
 	progress(value: string, task?: (progress: Progress<ChatResponseWarningPart | ChatResponseReferencePart>) => Thenable<string | void>): void {

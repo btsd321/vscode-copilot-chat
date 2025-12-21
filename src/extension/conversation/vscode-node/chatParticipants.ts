@@ -4,15 +4,13 @@
  *--------------------------------------------------------------------------------------------*/
 import * as vscode from 'vscode';
 import { IAuthenticationService } from '../../../platform/authentication/common/authentication';
-import { IChatAgentService, defaultAgentName, editingSessionAgent2Name, editingSessionAgentEditorName, editingSessionAgentName, editorAgentName, editsAgentName, getChatParticipantIdFromName, notebookEditorAgentName, terminalAgentName, vscodeAgentName, workspaceAgentName } from '../../../platform/chat/common/chatAgents';
+import { IChatAgentService, defaultAgentName, editingSessionAgent2Name, editingSessionAgentEditorName, editingSessionAgentName, editsAgentName, getChatParticipantIdFromName, notebookEditorAgentName, terminalAgentName, vscodeAgentName, workspaceAgentName } from '../../../platform/chat/common/chatAgents';
 import { IChatQuotaService } from '../../../platform/chat/common/chatQuotaService';
 import { IInteractionService } from '../../../platform/chat/common/interactionService';
 import { ConfigKey, IConfigurationService } from '../../../platform/configuration/common/configurationService';
 import { IEndpointProvider } from '../../../platform/endpoint/common/endpointProvider';
 import { IOctoKitService } from '../../../platform/github/common/githubService';
-import { ILogService } from '../../../platform/log/common/logService';
 import { IExperimentationService } from '../../../platform/telemetry/common/nullExperimentationService';
-import { DeferredPromise } from '../../../util/vs/base/common/async';
 import { Event, Relay } from '../../../util/vs/base/common/event';
 import { DisposableStore, IDisposable } from '../../../util/vs/base/common/lifecycle';
 import { autorun } from '../../../util/vs/base/common/observableInternal';
@@ -30,18 +28,17 @@ import { getAdditionalWelcomeMessage } from './welcomeMessageProvider';
 export class ChatAgentService implements IChatAgentService {
 	declare readonly _serviceBrand: undefined;
 
-	private _lastChatAgents: ChatParticipants | undefined; // will be cleared when disposed
+	private _lastChatAgents: ChatAgents | undefined; // will be cleared when disposed
 
 	constructor(
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 	) { }
-
-	public debugGetCurrentChatAgents(): ChatParticipants | undefined {
+	public debugGetCurrentChatAgents(): ChatAgents | undefined {
 		return this._lastChatAgents;
 	}
 
 	register(): IDisposable {
-		const chatAgents = this.instantiationService.createInstance(ChatParticipants);
+		const chatAgents = this.instantiationService.createInstance(ChatAgents);
 		chatAgents.register();
 		this._lastChatAgents = chatAgents;
 		return {
@@ -53,12 +50,10 @@ export class ChatAgentService implements IChatAgentService {
 	}
 }
 
-class ChatParticipants implements IDisposable {
+class ChatAgents implements IDisposable {
 	private readonly _disposables = new DisposableStore();
 
 	private additionalWelcomeMessage: vscode.MarkdownString | undefined;
-
-	private requestBlocker: Promise<void>;
 
 	constructor(
 		@IOctoKitService private readonly octoKitService: IOctoKitService,
@@ -71,24 +66,7 @@ class ChatParticipants implements IDisposable {
 		@IChatQuotaService private readonly _chatQuotaService: IChatQuotaService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@IExperimentationService private readonly experimentationService: IExperimentationService,
-		@ILogService private readonly logService: ILogService,
-	) {
-		// TODO@roblourens This may not be necessary - the point for now is to match the old behavior of blocking chat until auth completes
-		const requestBlockerDeferred = new DeferredPromise<void>();
-		this.requestBlocker = requestBlockerDeferred.p;
-		if (authenticationService.copilotToken) {
-			this.logService.debug(`ChatParticipants: Copilot token already available`);
-			requestBlockerDeferred.complete();
-		} else {
-			this._disposables.add(authenticationService.onDidAuthenticationChange(async () => {
-				const hasSession = !!authenticationService.copilotToken;
-				this.logService.debug(`ChatParticipants: onDidAuthenticationChange has token: ${hasSession}`);
-				if (hasSession) {
-					requestBlockerDeferred.complete();
-				}
-			}));
-		}
-	}
+	) { }
 
 	dispose() {
 		this._disposables.dispose();
@@ -101,14 +79,12 @@ class ChatParticipants implements IDisposable {
 		this._disposables.add(this.registerEditingAgent2());
 		this._disposables.add(this.registerEditingAgentEditor());
 		this._disposables.add(this.registerEditsAgent());
-		this._disposables.add(this.registerEditorDefaultAgent());
 		this._disposables.add(this.registerNotebookEditorDefaultAgent());
 		this._disposables.add(this.registerNotebookDefaultAgent());
 		this._disposables.add(this.registerWorkspaceAgent());
 		this._disposables.add(this.registerVSCodeAgent());
 		this._disposables.add(this.registerTerminalAgent());
 		this._disposables.add(this.registerTerminalPanelAgent());
-		this._disposables.add(this.registerReplayAgent());
 	}
 
 	private createAgent(name: string, defaultIntentIdOrGetter: IntentOrGetter, options?: { id?: string }): vscode.ChatParticipant {
@@ -193,9 +169,8 @@ class ChatParticipants implements IDisposable {
 	}
 
 	private registerEditingAgentEditor(): IDisposable {
-		const editingAgent = this.createAgent(editingSessionAgentEditorName, Intent.Edit);
+		const editingAgent = this.createAgent(editingSessionAgentEditorName, Intent.InlineChat);
 		editingAgent.iconPath = new vscode.ThemeIcon('copilot');
-		editingAgent.additionalWelcomeMessage = this.additionalWelcomeMessage;
 		return editingAgent;
 	}
 
@@ -217,7 +192,7 @@ class ChatParticipants implements IDisposable {
 
 	private registerDefaultAgent(): IDisposable {
 		const intentGetter = (request: vscode.ChatRequest) => {
-			if (this.configurationService.getExperimentBasedConfig(ConfigKey.Internal.AskAgent, this.experimentationService) && request.model.capabilities.supportsToolCalling && this.configurationService.getNonExtensionConfig('chat.agent.enabled')) {
+			if (this.configurationService.getExperimentBasedConfig(ConfigKey.TeamInternal.AskAgent, this.experimentationService) && request.model.capabilities.supportsToolCalling && this.configurationService.getNonExtensionConfig('chat.agent.enabled')) {
 				return Intent.AskAgent;
 			}
 			return Intent.Unknown;
@@ -237,7 +212,7 @@ class ChatParticipants implements IDisposable {
 You can also ask me questions about your editor selection by [starting an inline chat session](command:inlineChat.start).
 
 Learn more about [GitHub Copilot](https://docs.github.com/copilot/using-github-copilot/getting-started-with-github-copilot?tool=vscode&utm_source=editor&utm_medium=chat-panel&utm_campaign=2024q3-em-MSFT-getstarted) in [Visual Studio Code](https://code.visualstudio.com/docs/copilot/overview). Or explore the [Copilot walkthrough](command:github.copilot.open.walkthrough).`,
-			comment: "{Locked='](command:inlineChat.start)'}"
+			comment: `{Locked='](command:inlineChat.start)'}`
 		});
 		const markdownString = new vscode.MarkdownString(helpPostfix);
 		markdownString.isTrusted = { enabledCommands: ['inlineChat.start', 'github.copilot.open.walkthrough'] };
@@ -246,13 +221,6 @@ Learn more about [GitHub Copilot](https://docs.github.com/copilot/using-github-c
 		defaultAgent.additionalWelcomeMessage = this.additionalWelcomeMessage;
 		defaultAgent.titleProvider = this.instantiationService.createInstance(ChatTitleProvider);
 		defaultAgent.summarizer = this.instantiationService.createInstance(ChatSummarizerProvider);
-
-		return defaultAgent;
-	}
-
-	private registerEditorDefaultAgent(): IDisposable {
-		const defaultAgent = this.createAgent(editorAgentName, Intent.Editor);
-		defaultAgent.iconPath = new vscode.ThemeIcon('copilot');
 
 		return defaultAgent;
 	}
@@ -271,16 +239,8 @@ Learn more about [GitHub Copilot](https://docs.github.com/copilot/using-github-c
 		return defaultAgent;
 	}
 
-	private registerReplayAgent(): IDisposable {
-		const defaultAgent = this.createAgent('chatReplay', Intent.ChatReplay);
-		defaultAgent.iconPath = new vscode.ThemeIcon('copilot');
-
-		return defaultAgent;
-	}
-
 	private getChatParticipantHandler(id: string, name: string, defaultIntentIdOrGetter: IntentOrGetter, onRequestPaused: Event<vscode.ChatParticipantPauseStateEvent>): vscode.ChatExtendedRequestHandler {
 		return async (request, context, stream, token): Promise<vscode.ChatResult> => {
-			await this.requestBlocker;
 
 			// If we need privacy confirmation, i.e with 3rd party models. We will return a confirmation response and return early
 			const privacyConfirmation = await this.requestPolicyConfirmation(request, stream);
@@ -353,7 +313,7 @@ Learn more about [GitHub Copilot](https://docs.github.com/copilot/using-github-c
 				message: 'You have exceeded your premium request allowance. We have automatically switched you to {0} which is included with your plan. [Enable additional paid premium requests]({1}) to continue using premium models.',
 				args: [baseEndpoint.name, 'command:chat.enablePremiumOverages'],
 				// To make sure the translators don't break the link
-				comment: ["{Locked=']({'}"]
+				comment: [`{Locked=']({'}`]
 			}));
 			messageString.isTrusted = { enabledCommands: ['chat.enablePremiumOverages'] };
 		} else {

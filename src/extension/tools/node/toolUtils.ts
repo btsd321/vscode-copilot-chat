@@ -18,7 +18,7 @@ import { isAbsolute } from '../../../util/vs/base/common/path';
 import { isEqual, normalizePath } from '../../../util/vs/base/common/resources';
 import { URI } from '../../../util/vs/base/common/uri';
 import { IInstantiationService, ServicesAccessor } from '../../../util/vs/platform/instantiation/common/instantiation';
-import { LanguageModelPromptTsxPart, LanguageModelToolResult, Location } from '../../../vscodeTypes';
+import { LanguageModelPromptTsxPart, LanguageModelToolResult } from '../../../vscodeTypes';
 import { renderPromptElementJSON } from '../../prompts/node/base/promptRenderer';
 
 export function checkCancellation(token: CancellationToken): void {
@@ -39,16 +39,17 @@ export async function toolTSX(insta: IInstantiationService, options: vscode.Lang
 	]);
 }
 
-export function formatUriForFileWidget(uriOrLocation: URI | Location): string {
-	const uri = URI.isUri(uriOrLocation) ? uriOrLocation : uriOrLocation.uri;
-	const rangePart = URI.isUri(uriOrLocation) ?
-		'' :
-		`#${uriOrLocation.range.start.line + 1}-${uriOrLocation.range.end.line + 1}`;
-
-	// Empty link text -> rendered as file widget
-	return `[](${uri.toString()}${rangePart})`;
-}
-export function inputGlobToPattern(query: string, workspaceService: IWorkspaceService): vscode.GlobPattern[] {
+/**
+ * Converts a user input glob or file path into a VS Code glob pattern or RelativePattern.
+ *
+ * @param query The user input glob or file path.
+ * @param workspaceService The workspace service used to resolve relative paths.
+ * @param modelFamily The language model family (e.g., 'gpt-4.1'). If set to 'gpt-4.1', a workaround is applied:
+ *   GPT-4.1 struggles to append '/**' to patterns, so this function adds an additional pattern with '/**' appended.
+ *   Other models do not require this workaround.
+ * @returns An array of glob patterns suitable for use in file matching.
+ */
+export function inputGlobToPattern(query: string, workspaceService: IWorkspaceService, modelFamily: string | undefined): vscode.GlobPattern[] {
 	let pattern: vscode.GlobPattern = query;
 	if (isAbsolute(query)) {
 		try {
@@ -65,11 +66,18 @@ export function inputGlobToPattern(query: string, workspaceService: IWorkspaceSe
 	}
 
 	const patterns = [pattern];
-	if (typeof pattern === 'string' && !pattern.endsWith('/**')) {
-		patterns.push(pattern + '/**');
-	} else if (typeof pattern !== 'string' && !pattern.pattern.endsWith('/**')) {
-		patterns.push(new RelativePattern(pattern.baseUri, pattern.pattern + '/**'));
+
+	// For gpt-4.1, it struggles to append /** to the pattern itself, so here we work around it by
+	// adding a second pattern with /** appended.
+	// Other models are smart enough to append the /** suffix so they don't need this workaround.
+	if (modelFamily === 'gpt-4.1') {
+		if (typeof pattern === 'string' && !pattern.endsWith('/**')) {
+			patterns.push(pattern + '/**');
+		} else if (typeof pattern !== 'string' && !pattern.pattern.endsWith('/**')) {
+			patterns.push(new RelativePattern(pattern.baseUri, pattern.pattern + '/**'));
+		}
 	}
+
 	return patterns;
 }
 
@@ -99,10 +107,12 @@ export async function assertFileOkForTool(accessor: ServicesAccessor, uri: URI):
 
 	await assertFileNotContentExcluded(accessor, uri);
 
-	if (!workspaceService.getWorkspaceFolder(normalizePath(uri)) && !customInstructionsService.isExternalInstructionsFile(uri) && uri.scheme !== Schemas.untitled) {
+	const normalizedUri = normalizePath(uri);
+
+	if (!workspaceService.getWorkspaceFolder(normalizedUri) && uri.scheme !== Schemas.untitled && !customInstructionsService.isExternalInstructionsFile(normalizedUri)) {
 		const fileOpenInSomeTab = tabsAndEditorsService.tabs.some(tab => isEqual(tab.uri, uri));
 		if (!fileOpenInSomeTab) {
-			throw new Error(`File ${promptPathRepresentationService.getFilePath(uri)} is outside of the workspace, and not open in an editor, and can't be read`);
+			throw new Error(`File ${promptPathRepresentationService.getFilePath(normalizedUri)} is outside of the workspace, and not open in an editor, and can't be read`);
 		}
 	}
 }

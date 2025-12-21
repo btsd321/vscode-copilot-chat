@@ -430,6 +430,7 @@ export class RunnableResult {
 
 	public readonly priority: number;
 	public readonly items: ContextItem[];
+	public debugPath: string | undefined;
 
 	constructor(id: ContextRunnableResultId, priority: number, runnableResultContext: RunnableResultContext, primaryBudget: CharacterBudget, secondaryBudget: CharacterBudget, speculativeKind: SpeculativeKind, cache?: CacheInfo | undefined) {
 		this.id = id;
@@ -511,7 +512,8 @@ export class RunnableResult {
 			priority: this.priority,
 			items: this.items,
 			cache: this.cache,
-			speculativeKind: this.speculativeKind
+			speculativeKind: this.speculativeKind,
+			debugPath: this.debugPath
 		};
 	}
 }
@@ -694,12 +696,19 @@ export namespace CacheScopes {
 	}
 
 	export function createWithinCacheScope(node: tt.Node, sourceFile?: tt.SourceFile | undefined): CacheScope;
-	export function createWithinCacheScope(node: tt.NodeArray<tt.Node>, sourceFile: tt.SourceFile | undefined): CacheScope;
+	export function createWithinCacheScope(node: tt.NodeArray<tt.Node>, sourceFile?: tt.SourceFile | undefined): CacheScope;
 	export function createWithinCacheScope(node: tt.Node | tt.NodeArray<tt.Node>, sourceFile?: tt.SourceFile | undefined): CacheScope {
-		return {
-			kind: CacheScopeKind.WithinRange,
-			range: createRange(node as any, sourceFile),
-		};
+		if (isNodeArray(node)) {
+			return {
+				kind: CacheScopeKind.WithinRange,
+				range: createRange(node as tt.NodeArray<tt.Node>, sourceFile),
+			};
+		} else {
+			return {
+				kind: CacheScopeKind.WithinRange,
+				range: createRange(node as tt.Node, sourceFile),
+			};
+		}
 	}
 
 	export function createOutsideCacheScope(nodes: Iterable<tt.Node>, sourceFile: tt.SourceFile | undefined): CacheScope {
@@ -720,7 +729,7 @@ export namespace CacheScopes {
 	}
 
 	export function createRange(node: tt.Node, sourceFile?: tt.SourceFile | undefined): Range;
-	export function createRange(node: tt.NodeArray<tt.Node>, sourceFile: tt.SourceFile | undefined): Range;
+	export function createRange(node: tt.NodeArray<tt.Node>, sourceFile?: tt.SourceFile | undefined): Range;
 	export function createRange(node: tt.Node | tt.NodeArray<tt.Node>, sourceFile?: tt.SourceFile | undefined): Range {
 		let startOffset: number;
 		let endOffset: number;
@@ -833,7 +842,6 @@ export abstract class AbstractContextRunnable implements ContextRunnable {
 		this.priority = priority;
 		this.cost = cost;
 	}
-
 
 	public initialize(result: ContextResult): void {
 		if (this.result !== undefined) {
